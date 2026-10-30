@@ -1,0 +1,117 @@
+{
+  "enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "启用重排",
+    "hint": "关闭后只追踪来源和统计，不修改任何请求。布局在插件管理页「提示词编排」中编辑。"
+  },
+  "dry_run": {
+    "type": "bool",
+    "default": true,
+    "description": "试运行",
+    "hint": "开启时只计算重排结果并记录，不写回请求。确认布局无误后再关闭。"
+  },
+  "stats_window": {
+    "type": "int",
+    "default": 200,
+    "description": "稳定度统计窗口",
+    "hint": "每个布局按最近多少次请求统计片段的稳定度和出现率，范围 20～2000。"
+  },
+  "sample_limit": {
+    "type": "int",
+    "default": 30,
+    "description": "保留样本数",
+    "hint": "保存最近多少次请求的完整片段，用于页面预览，范围 5～200。"
+  },
+  "diff_char_limit": {
+    "type": "int",
+    "default": 50000,
+    "description": "system 对比上限（字）",
+    "hint": "某个插件整体改写 system 且长度超过此值时，不再逐字对比，整段记到该插件名下。范围 5000～500000。"
+  },
+  "inspector": {
+    "type": "object",
+    "description": "调用检查器",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "default": true,
+        "description": "启用检查器",
+        "hint": "关闭后包装直接透传，不记录任何调用。"
+      },
+      "depth": {
+        "type": "string",
+        "default": "wire",
+        "options": ["wire", "call"],
+        "labels": ["线路层（记录实际发出的请求）", "调用层（只记模型、用量和轮数）"],
+        "description": "捕获深度"
+      },
+      "capture_side": {
+        "type": "bool",
+        "default": false,
+        "description": "记录旁路调用",
+        "hint": "记录插件自己调用模型（如记忆总结、图片描述）的请求，数量可能很大。"
+      },
+      "umo_include": {
+        "type": "text",
+        "default": "",
+        "description": "只记录这些会话",
+        "hint": "每行一个 umo 通配符，例如 清宵:GroupMessage:*；留空表示全部会话。"
+      },
+      "umo_exclude": {
+        "type": "text",
+        "default": "",
+        "description": "排除这些会话",
+        "hint": "每行一个 umo 通配符。"
+      },
+      "save_response": {
+        "type": "bool",
+        "default": true,
+        "description": "保存回复正文",
+        "hint": "关闭后只保留结束原因和工具调用名。"
+      },
+      "fold_media": {
+        "type": "bool",
+        "default": true,
+        "description": "折叠图片与音频",
+        "hint": "把 base64 数据替换为带大小和摘要的占位文字，显著减小记录体积。"
+      },
+      "body_limit_kb": {
+        "type": "int",
+        "default": 2048,
+        "description": "单次请求体上限（KB）",
+        "hint": "超出部分截断并标注，范围 64～16384。"
+      },
+      "persist": {
+        "type": "bool",
+        "default": true,
+        "description": "落盘保存",
+        "hint": "关闭后只在内存中保留最近的记录，重启后丢失。"
+      },
+      "retention_days": {
+        "type": "int",
+        "default": 7,
+        "description": "保留天数",
+        "hint": "范围 1～90，超出后按天删除最旧的记录文件。"
+      },
+      "retention_mb": {
+        "type": "int",
+        "default": 500,
+        "description": "总大小上限（MB）",
+        "hint": "范围 50～10240，超出后从最旧的一天开始删除。"
+      },
+      "memory_traces": {
+        "type": "int",
+        "default": 200,
+        "description": "内存中保留的记录数",
+        "hint": "范围 20～2000。"
+      },
+      "prices": {
+        "type": "text",
+        "default": "",
+        "description": "模型单价（可选）",
+        "hint": "每行一个“模型名=未命中输入,命中输入,输出”，单位为美元 / 百万 tokens，例如 deepseek-flash=0.3,0.006,1.2。填写后页面显示估算费用。"
+      }
+    }
+  }
+}

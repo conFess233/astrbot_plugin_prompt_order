@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>提示词编排</title>
+    <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./motion.css" />
+    <link rel="stylesheet" href="./app.css" />
+  </head>
+  <body>
+    <div id="topline" class="topline" role="progressbar" aria-label="正在加载"></div>
+    <main class="shell">
+      <header class="titlebar">
+        <div class="brand">
+          <div class="brand-mark" data-i="layers" aria-hidden="true"></div>
+          <div>
+            <h1>提示词编排</h1>
+            <p><span id="conn-dot" class="dot pending"></span><span id="conn-text">正在连接…</span></p>
+          </div>
+        </div>
+        <nav class="island" id="island" aria-label="管理模块">
+          <span class="pill" aria-hidden="true"></span>
+          <button type="button" data-view="arrange" data-i="layers" aria-current="page">排序<span id="badge-arrange" class="badge" hidden></span></button>
+          <button type="button" data-view="inspector" data-i="pulse">检查器</button>
+          <button type="button" data-view="changes" data-i="history">改动记录</button>
+          <button type="button" data-view="coverage" data-i="shield">覆盖范围</button>
+        </nav>
+        <div class="title-actions">
+          <button id="refresh" class="icon-btn" type="button" aria-label="刷新数据" title="刷新数据" data-i="refresh"></button>
+        </div>
+      </header>
+
+      <!-- 排序 -->
+      <section class="view on" id="view-arrange" aria-labelledby="h-arrange">
+        <div class="section-head">
+          <h2 id="h-arrange">片段顺序</h2>
+          <div class="head-actions">
+            <label class="toggle" title="关闭后只追踪与统计，不改请求"><span class="switch" id="sw-enabled" role="switch" tabindex="0" aria-label="启用重排"></span>启用重排</label>
+            <label class="toggle" title="开启时只计算重排结果，不写回请求"><span class="switch" id="sw-dry" role="switch" tabindex="0" aria-label="试运行"></span>试运行</label>
+          </div>
+        </div>
+        <div class="ruler"></div>
+
+        <div class="card card-pad layout-bar">
+          <label class="field">布局<select id="layout-select" class="input"></select></label>
+          <label class="field grow">会话范围（umo 通配符，逗号分隔；留空为兜底布局）<input id="layout-scope" class="input" type="text" placeholder="例如 清宵:GroupMessage:*" /></label>
+          <label class="field">名称<input id="layout-name" class="input" type="text" maxlength="40" /></label>
+          <div class="bar-actions">
+            <button class="btn btn-ghost btn-sm" type="button" id="layout-new" data-i="plus">新建</button>
+            <button class="btn btn-ghost btn-sm" type="button" id="layout-copy" data-i="copy">复制</button>
+            <button class="btn btn-danger btn-sm" type="button" id="layout-del" data-i="trash">删除此布局</button>
+            <button class="btn btn-tonal btn-sm" type="button" id="layout-recommend" data-i="sparkle">推荐排序</button>
+            <button class="btn btn-ghost btn-sm" type="button" id="layout-versions" data-i="history">历史版本</button>
+          </div>
+        </div>
+
+        <div class="layout" id="arrange-layout">
+          <div class="board">
+            <section class="card card-pad library" aria-labelledby="h-lib">
+              <div class="card-title"><div><h3 id="h-lib">未排片段</h3><p id="lib-sub">最近请求中出现、但布局里还没写到的片段，按来源插件分组。拖进下方的区，或用卡片上的按钮移动。</p></div></div>
+              <div id="library" class="lib-groups"></div>
+            </section>
+            <section class="card card-pad zone-card" aria-labelledby="h-system">
+              <div class="card-title"><div><h3 id="h-system">SYSTEM 区</h3><p>会被缓存。放常驻且内容不变的片段，越靠前越稳定越好。</p></div></div>
+              <ol class="zone" id="zone-system" data-zone="system" aria-label="SYSTEM 区片段"></ol>
+            </section>
+            <section class="card card-pad zone-card" aria-labelledby="h-tail">
+              <div class="card-title"><div><h3 id="h-tail">TAIL 区</h3><p>本轮附加内容，每轮重新计费。用户原话固定在最前。</p></div></div>
+              <div class="fixed-card" aria-hidden="true">用户原话（固定第一）</div>
+              <ol class="zone" id="zone-tail" data-zone="tail" aria-label="TAIL 区片段"></ol>
+            </section>
+            <section class="card card-pad zone-card" aria-labelledby="h-tools">
+              <div class="card-title"><div><h3 id="h-tools">TOOLS 区</h3><p>工具定义位于整个提示词最前面，任何增删都会让后面的缓存全部失效。</p></div>
+                <div class="segmented" id="tools-mode" role="radiogroup" aria-label="工具排序方式"><span data-mode="keep" role="radio" tabindex="0">保持原样</span><span data-mode="by_name" role="radio" tabindex="0">按名字</span><span data-mode="custom" role="radio" tabindex="0">自定义</span></div></div>
+              <ol class="zone tools" id="zone-tools" data-zone="tools" aria-label="工具顺序"></ol>
+            </section>
+          </div>
+          <aside class="side">
+            <div class="card side-card" id="arrange-side"></div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- 检查器 -->
+      <section class="view" id="view-inspector" aria-labelledby="h-inspector">
+        <section class="stats" id="ins-stats"></section>
+        <div class="section-head">
+          <h2 id="h-inspector">调用记录</h2>
+          <div class="head-actions">
+            <button class="btn btn-ghost btn-sm" type="button" id="ins-live" data-i="pause" aria-pressed="false">暂停实时</button>
+            <button class="btn btn-ghost btn-sm" type="button" id="ins-export" data-i="download">导出</button>
+            <button class="btn btn-ghost btn-sm" type="button" id="ins-settings" data-i="settings">检查器开关</button>
+          </div>
+        </div>
+        <div class="ruler"></div>
+        <div class="layout" id="ins-layout">
+          <div>
+            <form class="card card-pad" id="ins-filter" style="margin-bottom:14px">
+              <div class="filters ins-filters">
+                <label class="field">会话<input class="input" name="umo" placeholder="umo 通配符" /></label>
+                <label class="field">模型<input class="input" name="model" placeholder="精确匹配" /></label>
+                <label class="field">类型<select class="input" name="kind"><option value="">全部</option><option value="main">主对话</option><option value="side">旁路调用</option></select></label>
+                <label class="field">搜索<input class="input" name="q" placeholder="消息内容或会话" /></label>
+                <button class="btn btn-primary" type="submit" data-i="search">查询</button>
+              </div>
+              <div class="filter-checks">
+                <label><input type="checkbox" name="errors" /> 只看出错</label>
+                <label><input type="checkbox" name="low_hit" /> 命中率低于 50%</label>
+              </div>
+            </form>
+            <div class="card">
+              <div class="table-tools"><div><strong id="ins-total">0 条</strong><span id="ins-hint">点击一行查看详情</span></div></div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>时间</th><th>会话 / 消息</th><th class="col-opt">模型</th><th>轮数</th><th>输入（命中率）</th><th class="col-opt">耗时</th><th class="col-opt">状态</th></tr></thead>
+                  <tbody id="ins-rows"></tbody>
+                </table>
+              </div>
+              <div class="table-foot"><span id="ins-foot"></span><button class="btn btn-ghost btn-sm" type="button" id="ins-more">加载更多</button></div>
+            </div>
+          </div>
+          <aside class="side">
+            <div class="card side-card" id="ins-side"></div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- 改动记录 -->
+      <section class="view" id="view-changes" aria-labelledby="h-changes">
+        <div class="section-head"><h2 id="h-changes">钩子改动记录</h2></div>
+        <div class="ruler"></div>
+        <div class="layout">
+          <div class="card">
+            <div class="table-tools"><div><strong>最近请求样本</strong><span>每个样本记录了构建阶段每个钩子做了什么</span></div></div>
+            <div class="table-wrap"><table><thead><tr><th>时间</th><th>会话 / 消息</th><th>布局</th><th>结果</th></tr></thead><tbody id="chg-rows"></tbody></table></div>
+          </div>
+          <aside class="side"><div class="card side-card" id="chg-side"></div></aside>
+        </div>
+      </section>
+
+      <!-- 覆盖范围 -->
+      <section class="view" id="view-coverage" aria-labelledby="h-coverage">
+        <div class="section-head"><h2 id="h-coverage">覆盖范围</h2></div>
+        <div class="ruler"></div>
+        <div class="layout">
+          <div class="card"><div class="table-wrap"><table><thead><tr><th>改动发生在哪里</th><th>识别来源</th><th>参与排序</th></tr></thead><tbody id="cov-rows"></tbody></table></div></div>
+          <aside class="side"><div class="card side-card" id="cov-side"></div></aside>
+        </div>
+      </section>
+    </main>
+
+    <div class="scrim" id="scrim"></div>
+    <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <header><h3 id="sheet-title">详情</h3><button class="icon-btn" type="button" id="sheet-close" aria-label="关闭" data-i="x"></button></header>
+      <div class="body" id="sheet-body"></div>
+    </div>
+
+    <div class="toasts" id="toasts" aria-live="polite"></div>
+    <div class="fab-wrap">
+      <div class="fab-menu" id="fab-menu" role="menu">
+        <a role="menuitem" tabindex="-1" style="--k:3" data-act="refresh" data-i="refresh">刷新数据<kbd>R</kbd></a>
+        <a role="menuitem" tabindex="-1" style="--k:2" data-act="recommend" data-i="sparkle">推荐排序</a>
+        <a role="menuitem" tabindex="-1" style="--k:1" data-act="inspector" data-i="pulse">打开检查器</a>
+        <a role="menuitem" tabindex="-1" style="--k:0" data-act="search" data-i="search">聚焦搜索<kbd>/</kbd></a>
+      </div>
+      <div class="fab-pill" id="pill" style="display:none"><span class="txt"><button class="discard" type="button" id="discard">放弃</button><span id="pill-n">0 项未保存</span><button class="save" type="button" id="save" data-i="check">保存</button></span></div>
+      <button class="fab" type="button" id="fab" aria-label="快捷操作" aria-expanded="false" aria-controls="fab-menu" data-i="bolt"></button>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
