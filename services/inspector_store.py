@@ -175,8 +175,12 @@ class TraceStore:
             logger.warning("提示词编排：进行中记录文件损坏，已跳过", exc_info=True)
             return
         recovered = 0
-        for data in items:
-            trace = _trace_from_dict(data)
+        for data in items if isinstance(items, list) else []:
+            try:
+                trace = _trace_from_dict(data)
+            except (TypeError, ValueError, KeyError, AttributeError):
+                logger.warning("提示词编排：一条进行中记录格式不对，已跳过", exc_info=True)
+                continue
             trace.status = "interrupted"
             trace.ended_at = trace.ended_at or trace.touched_at
             self._pending.append(trace)
@@ -246,40 +250,45 @@ class TraceStore:
             return None
 
     def stats(self, since: float, memory: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-        """按天、按模型、按会话汇总；进行中的记录不计入。可在线程中调用。"""
+        """按天、按类型、按模型、按会话汇总；进行中的记录不计入。可在线程中调用。"""
 
         rows: list[tuple] = []
+        seen: set[str] = set()
         if self._conn is not None and self.persist:
             with self._lock:
                 rows = self._conn.execute(
-                    "SELECT ts, umo, kind, models, rounds, input, cached, output, error "
+                    "SELECT id, ts, umo, kind, models, rounds, input, cached, output, error "
                     "FROM traces WHERE ts >= ?",
                     (since,),
                 ).fetchall()
-        else:
-            for s in self.memory_summaries() if memory is None else memory:
-                if s["started_at"] >= since and s["status"] != "open":
-                    rows.append(
-                        (
-                            s["started_at"],
-                            s["umo"],
-                            s["kind"],
-                            ",".join(s["models"]),
-                            s["rounds"],
-                            s["input"],
-                            s["input_cached"],
-                            s["output"],
-                            int(s["error"]),
-                        )
+            seen = {row[0] for row in rows}
+        # 刚结束的记录最多要等一秒才写进索引，内存里有而索引里没有的也要算上。
+        for s in self.memory_summaries() if memory is None else memory:
+            if s["started_at"] >= since and s["status"] != "open" and s["id"] not in seen:
+                rows.append(
+                    (
+                        s["id"],
+                        s["started_at"],
+                        s["umo"],
+                        s["kind"],
+                        ",".join(s["models"]),
+                        s["rounds"],
+                        s["input"],
+                        s["input_cached"],
+                        s["output"],
+                        int(s["error"]),
                     )
+                )
         by_day: dict[str, dict[str, Any]] = {}
         by_model: dict[str, dict[str, Any]] = {}
         by_umo: dict[str, dict[str, Any]] = {}
         total = _bucket()
-        for ts, umo, kind, models, rounds, inp, cached, out, err in rows:
+        by_kind = {"main": _bucket(), "side": _bucket()}
+        for _id, ts, umo, kind, models, rounds, inp, cached, out, err in rows:
             day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
             for bucket in (
                 total,
+                by_kind["main" if kind == "main" else "side"],
                 by_day.setdefault(day, _bucket()),
                 by_model.setdefault(models or "-", _bucket()),
                 by_umo.setdefault(umo or "-", _bucket()),
@@ -291,7 +300,13 @@ class TraceStore:
                 bucket["cached"] += cached or 0
                 bucket["output"] += out or 0
                 bucket["errors"] += err or 0
-        return {"total": total, "by_day": by_day, "by_model": by_model, "by_umo": by_umo}
+        return {
+            "total": total,
+            "by_kind": by_kind,
+            "by_day": by_day,
+            "by_model": by_model,
+            "by_umo": by_umo,
+        }
 
     def disk_usage(self) -> int:
         total = 0

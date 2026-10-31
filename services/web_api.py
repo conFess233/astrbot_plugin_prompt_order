@@ -224,6 +224,9 @@ class WebApi:
             data = await asyncio.to_thread(store.get_persisted, trace_id)
         if data is None:
             raise LookupError("记录不存在或已按保留策略删除")
+        data["cost"] = self.inspector.cost_of(
+            (str(r.get("model", "")), r.get("usage") or {}) for r in data.get("round_list", [])
+        )
         return json_response(data)
 
     @guarded
@@ -247,18 +250,29 @@ class WebApi:
         summaries = await asyncio.to_thread(
             store.query, self._filters(), limit, None, store.memory_summaries()
         )
-        lines = []
+        # 内存记录在事件循环线程序列化；其余的一次性放进线程读盘，不逐条切换线程。
+        lines: list[str | None] = []
+        missing: list[tuple[int, str]] = []
         for summary in summaries:
             trace = store.recent.get(summary["id"])
-            data = (
-                trace.to_dict()
-                if trace is not None
-                else await asyncio.to_thread(store.get_persisted, summary["id"])
-            )
-            if data is not None:
-                lines.append(json.dumps(data, ensure_ascii=False, default=str))
+            if trace is not None:
+                lines.append(json.dumps(trace.to_dict(), ensure_ascii=False, default=str))
+            else:
+                missing.append((len(lines), summary["id"]))
+                lines.append(None)
+
+        def read_missing() -> list[tuple[int, str]]:
+            found = []
+            for index, trace_id in missing:
+                data = store.get_persisted(trace_id)
+                if data is not None:
+                    found.append((index, json.dumps(data, ensure_ascii=False, default=str)))
+            return found
+
+        for index, line in await asyncio.to_thread(read_missing):
+            lines[index] = line
         return stream_response(
-            iter([line + "\n" for line in lines]),
+            iter([line + "\n" for line in lines if line is not None]),
             content_type="application/x-ndjson; charset=utf-8",
             headers={"Content-Disposition": 'attachment; filename="prompt_order_traces.jsonl"'},
         )

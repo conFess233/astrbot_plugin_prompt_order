@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections.abc import Iterable
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ from .settings import Settings
 
 REFRESH_SECONDS = 60.0
 IDLE_CLOSE_SECONDS = 300.0
+# 还有一轮没返回（例如长时间思考的流式调用）时放宽到半小时。
+RUNNING_CLOSE_SECONDS = 1800.0
 
 
 class InspectorService:
@@ -75,7 +78,9 @@ class InspectorService:
                     self.refresh()
                 now = time.time()
                 for trace in self.store.open_traces():
-                    if now - trace.touched_at > IDLE_CLOSE_SECONDS:
+                    running = any(r.duration_ms is None for r in trace.rounds)
+                    limit = RUNNING_CLOSE_SECONDS if running else IDLE_CLOSE_SECONDS
+                    if now - trace.touched_at > limit:
                         # 出错路径可能收不到 on_agent_done，长时间无动静就收尾。
                         trace.status = "interrupted"
                         self._close(trace)
@@ -180,13 +185,17 @@ class InspectorService:
     # ---------- 费用 ----------
 
     def cost(self, trace: Trace) -> float | None:
+        return self.cost_of((rnd.model, rnd.usage) for rnd in trace.rounds)
+
+    def cost_of(self, rounds: Iterable[tuple[str, dict[str, Any]]]) -> float | None:
+        """按每轮的模型与用量估算费用；没有配置价格的模型不计入。"""
+
         total, priced = 0.0, False
-        for rnd in trace.rounds:
-            price = self.settings.inspector.price_of(rnd.model)
+        for model, usage in rounds:
+            price = self.settings.inspector.price_of(model)
             if price is None:
                 continue
             miss, hit, out = price
-            usage = rnd.usage
             cached = usage.get("input_cached", 0)
             other = usage.get("input_other", usage.get("input", 0) - cached)
             total += (other * miss + cached * hit + usage.get("output", 0) * out) / 1_000_000

@@ -84,6 +84,10 @@
 
       <!-- 检查器 -->
       <section class="view" id="view-inspector" aria-labelledby="h-inspector">
+        <div class="stats-head">
+          <span class="stats-title">今日汇总</span>
+          <div class="segmented" id="ins-scope" role="radiogroup" aria-label="汇总范围"><span data-scope="total" role="radio" tabindex="0">合计</span><span data-scope="main" role="radio" tabindex="0">主模型</span><span data-scope="side" role="radio" tabindex="0">旁路调用</span></div>
+        </div>
         <section class="stats" id="ins-stats"></section>
         <div class="section-head">
           <h2 id="h-inspector">调用记录</h2>

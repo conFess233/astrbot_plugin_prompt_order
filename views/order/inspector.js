@@ -19,24 +19,54 @@ const S = {
 const TABS = [["request", "实际请求"], ["build", "注入来源"], ["response", "响应"], ["usage", "用量"], ["http", "HTTP"]];
 
 // ---------- 汇总与列表 ----------
+const SCOPE_KEY = "prompt_order.ins_scope";
+const SCOPES = { total: "合计", main: "主模型", side: "旁路调用" };
+let scope = "total";
+try { scope = SCOPES[localStorage.getItem(SCOPE_KEY)] ? localStorage.getItem(SCOPE_KEY) : "total"; } catch { /* 浏览器存储不可用时用默认值 */ }
+let statsData = null;
+
 async function loadStats() {
   try {
-    const data = await apiGet("inspector/stats", { days: 1 });
-    const t = data.total;
-    const box = $("#ins-stats");
-    const stat = (label, value, unit, bar) => h("div", { class: "stat" }, [
-      h("div", { class: "label" }, [h("span", { text: label })]),
-      h("div", { class: "value" }, [String(value), h("small", { text: unit })]), bar || null]);
-    const rate = t.input ? t.cached / t.input : 0;
-    box.replaceChildren(
-      stat("今日调用", num(t.count), `次 · 主对话 ${t.main} · 旁路 ${t.side}`),
-      stat("输入 tokens", num(t.input), `命中 ${pct(t.input ? rate : null)}`, segBar(rate, 20, rate >= 0.7 ? "ok" : rate >= 0.4 ? "warn" : "danger")),
-      stat("输出 tokens", num(t.output), "tokens"),
-      stat("平均轮数", t.count ? (t.rounds / t.count).toFixed(2) : "—", `出错 ${t.errors} 次`),
-    );
+    statsData = await apiGet("inspector/stats", { days: 1 });
+    renderStats();
   } catch (err) {
     $("#ins-stats").replaceChildren(h("p", { class: "empty", text: `汇总读取失败：${errText(err)}` }));
   }
+}
+
+function renderStats() {
+  $$("#ins-scope span").forEach((s) => {
+    const on = s.dataset.scope === scope;
+    s.classList.toggle("on", on);
+    s.setAttribute("aria-checked", on ? "true" : "false");
+  });
+  if (!statsData) return;
+  const total = statsData.total;
+  // 旧版后端没有 by_kind 时只能显示合计。
+  const t = scope === "total" ? total : statsData.by_kind?.[scope] || total;
+  const stat = (label, value, unit, bar) => h("div", { class: "stat" }, [
+    h("div", { class: "label" }, [h("span", { text: label })]),
+    h("div", { class: "value" }, [String(value), h("small", { text: unit })]), bar || null]);
+  const rate = t.input ? t.cached / t.input : 0;
+  const share = total.count ? ` · 占 ${pct(t.count / total.count)}` : "";
+  $("#ins-stats").replaceChildren(
+    stat("今日调用", num(t.count), scope === "total" ? `次 · 主模型 ${t.main} · 旁路 ${t.side}` : `次${share}`),
+    stat("输入 tokens", num(t.input), `命中 ${pct(t.input ? rate : null)}`, segBar(rate, 20, rate >= 0.7 ? "ok" : rate >= 0.4 ? "warn" : "danger")),
+    stat("输出 tokens", num(t.output), "tokens"),
+    stat("平均轮数", t.count ? (t.rounds / t.count).toFixed(2) : "—", `出错 ${t.errors} 次`),
+  );
+}
+
+let statsTimer = null;
+function scheduleStats() {
+  if (statsTimer) return;
+  statsTimer = setTimeout(() => { statsTimer = null; loadStats(); }, 1500);
+}
+
+function pickScope(value) {
+  scope = value;
+  try { localStorage.setItem(SCOPE_KEY, value); } catch { /* 忽略 */ }
+  renderStats();
 }
 
 function readFilters() {
@@ -121,7 +151,7 @@ function onLive(msg) {
       if (old) old.replaceWith(rowFor(msg, false));
     }
     if (S.selected === msg.id) select(msg.id, true);
-    loadStats();
+    scheduleStats();
   }
   if (msg.type === "round_end" && S.selected === msg.trace_id) select(msg.trace_id, true);
 }
@@ -188,6 +218,7 @@ function renderDetail() {
     h("button", { type: "button", class: "icon-btn", "aria-label": "全屏查看", title: "全屏查看", onclick: fullscreen }, [iconEl("maximize")]),
   ]);
   const item = S.items.find((i) => i.id === d.id) || {};
+  const cost = d.cost ?? item.cost;
   const meta = h("dl", { class: "kv" }, [
     h("dt", { text: "会话" }), h("dd", { class: "mono", text: d.umo || "—" }),
     h("dt", { text: "发送者" }), h("dd", { text: d.sender || "—" }),
@@ -195,8 +226,8 @@ function renderDetail() {
     h("dt", { text: "开始" }), h("dd", { class: "mono", text: time(d.started_at, true) }),
     h("dt", { text: "用量" }), h("dd", { text: `输入 ${num(d.input)}（命中 ${num(d.input_cached)} · ${pct(d.hit_rate)}）· 输出 ${num(d.output)}` }),
     h("dt", { text: "耗时" }), h("dd", { text: `${ms(d.duration_ms)} · ${d.rounds} 轮` }),
-    item.cost !== undefined && item.cost !== null ? h("dt", { text: "估算费用" }) : null,
-    item.cost !== undefined && item.cost !== null ? h("dd", { text: `$${item.cost}` }) : null,
+    cost !== undefined && cost !== null ? h("dt", { text: "估算费用" }) : null,
+    cost !== undefined && cost !== null ? h("dd", { text: `$${cost}` }) : null,
   ]);
   const rounds = d.round_list || [];
   const roundTabs = h("div", { class: "subtabs", role: "tablist", "aria-label": "轮次" }, rounds.map((r, i) =>
@@ -319,7 +350,7 @@ function usageTab(rnd) {
     h("dt", { text: "输出" }), h("dd", { text: `${num(u.output)}${u.reasoning ? `（其中思考 ${num(u.reasoning)}）` : ""}` }),
     h("dt", { text: "耗时" }), h("dd", { text: `${ms(rnd.duration_ms)}${rnd.ttft_ms ? ` · 首字 ${ms(rnd.ttft_ms)}` : ""}` }),
   ]), segBar(rate || 0, 24, rate >= 0.7 ? "ok" : rate >= 0.4 ? "warn" : "danger")];
-  const cmp = h("div", { class: "section" }, [h("h4", { text: "与同会话上一次调用对比" })]);
+  const cmp = h("div", { class: "section" }, [h("h4", { text: S.round > 0 ? "与本次上一轮对比" : "与同会话上一次调用对比" })]);
   if (S.prev && S.prev.round === S.round) cmp.append(h("p", { text: S.prev.text }));
   else if (S.detail.kind === "main") cmp.append(btn("找出前缀从哪里开始不同", { cls: "btn btn-tonal btn-sm", onClick: (e) => comparePrev(e.currentTarget) }));
   else cmp.append(h("p", { class: "empty", text: "旁路调用不做对比。" }));
@@ -331,12 +362,20 @@ function usageTab(rnd) {
 async function comparePrev(button) {
   const d = S.detail;
   const rnd = currentRound();
-  const idx = S.items.findIndex((i) => i.id === d.id);
-  const older = S.items.slice(idx + 1).find((i) => i.umo === d.umo && i.kind === "main");
-  if (!older) { toast("列表里没有同会话更早的调用，可以先加载更多", "bad"); return; }
-  const prev = await busy(button, "对比中", () => apiGet("inspector/trace", { id: older.id })).catch((err) => { toast(errText(err), "bad"); return null; });
-  if (!prev) return;
-  const prevRound = prev.round_list[prev.round_list.length - 1];
+  const round = S.round;
+  let prev = d;
+  let prevRound = round > 0 ? d.round_list[round - 1] : null;
+  if (!prevRound) {
+    const idx = S.items.findIndex((i) => i.id === d.id);
+    const older = S.items.slice(idx + 1).find((i) => i.umo === d.umo && i.kind === "main" && i.rounds > 0);
+    if (!older) { toast("列表里没有同会话更早的调用，可以先加载更多", "bad"); return; }
+    prev = await busy(button, "对比中", () => apiGet("inspector/trace", { id: older.id })).catch((err) => { toast(errText(err), "bad"); return null; });
+    if (!prev || S.detail !== d) return;
+    const list = prev.round_list || [];
+    prevRound = list[list.length - 1];
+    if (!prevRound) { toast("上一次调用没有记录到轮次", "bad"); return; }
+  }
+  const where = prev === d ? `本次第 ${prevRound.index} 轮` : `上一次（${time(prev.started_at)}）`;
   const a = requestBody(prevRound).body;
   const b = requestBody(rnd).body;
   let text;
@@ -354,9 +393,9 @@ async function comparePrev(button) {
       ? "第 0 条（system）就不同：system 内容变了，整个请求的缓存失效。"
       : index >= b.messages.length
         ? "消息完全一致。"
-        : `前 ${index} 条消息与上一次（${time(prev.started_at)}）一致；从第 ${index} 条（${role}）开始不同，已在“实际请求”中标出。${index === 1 ? "第 1 条就不同，通常是历史被截断。" : ""}`;
+        : `前 ${index} 条消息与${where}一致；从第 ${index} 条（${role}）开始不同，已在“实际请求”中标出。${index === 1 ? "第 1 条就不同，通常是历史被截断。" : ""}`;
   }
-  S.prev = { round: S.round, index, text };
+  S.prev = { round, index, text };
   renderDetail();
 }
 
@@ -472,6 +511,11 @@ let started = false;
 export async function show() {
   if (!started) {
     started = true;
+    $$("#ins-scope span").forEach((s) => {
+      s.addEventListener("click", () => pickScope(s.dataset.scope));
+      s.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickScope(s.dataset.scope); } });
+    });
+    renderStats();
     await Promise.all([loadStats(), loadList()]);
     renderDetail();
   }

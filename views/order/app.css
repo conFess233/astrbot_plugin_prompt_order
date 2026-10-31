@@ -129,3 +129,7 @@ td .sub { display: block; color: var(--muted); font-size: 12px; max-width: 360px
   .section-head h2 { flex: 1 0 100%; }
   .head-actions { width: 100%; }
 }
+
+/* 检查器汇总：合计 / 主模型 / 旁路调用切换 */
+.stats-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.stats-title { color: var(--muted); font-size: 13px; font-weight: 600; }
