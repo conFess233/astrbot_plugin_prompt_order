@@ -106,6 +106,8 @@ class InspectorService:
 
     def open_main(self, event: Any, state: Any, req: Any) -> Trace | None:
         umo = state.umo
+        # 清除历史思考也依赖 provider 包装，不记录的会话同样要补装。
+        self.refresh()
         if not self._wanted(umo):
             CURRENT_TRACE.set(None)
             return None
@@ -115,7 +117,6 @@ class InspectorService:
             sender = str(event.get_sender_name() or event.get_sender_id() or "")
         except Exception:
             pass
-        self.refresh()
         trace = Trace(kind="main", umo=umo, title=title, sender=sender, layout_id=state.layout_id)
         trace.session_id = str(getattr(req, "session_id", "") or "")
         trace.req_ref = req

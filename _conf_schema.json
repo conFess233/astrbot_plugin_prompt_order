@@ -29,6 +29,12 @@
     "description": "system 对比上限（字）",
     "hint": "某个插件整体改写 system 且长度超过此值时，不再逐字对比，整段记到该插件名下。范围 5000～500000。"
   },
+  "strip_reasoning": {
+    "type": "bool",
+    "default": false,
+    "description": "清除历史思考（仅 DeepSeek）",
+    "hint": "发送前把已结束轮次里模型的思考内容清空，减少输入 tokens；本轮工具调用链的思考保留，保存的对话历史不受影响。开启后第一次请求会有一次缓存未命中。"
+  },
   "inspector": {
     "type": "object",
     "description": "调用检查器",
@@ -42,8 +48,14 @@
       "depth": {
         "type": "string",
         "default": "wire",
-        "options": ["wire", "call"],
-        "labels": ["线路层（记录实际发出的请求）", "调用层（只记模型、用量和轮数）"],
+        "options": [
+          "wire",
+          "call"
+        ],
+        "labels": [
+          "线路层（记录实际发出的请求）",
+          "调用层（只记模型、用量和轮数）"
+        ],
         "description": "捕获深度"
       },
       "capture_side": {

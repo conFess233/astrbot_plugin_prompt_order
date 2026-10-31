@@ -40,6 +40,7 @@ export async function load() {
   S.saved = data.config;
   S.enabled = data.enabled;
   S.dryRun = data.dry_run;
+  S.strip = Boolean(data.strip_reasoning);
   S.wrapped = data.wrapped_hooks;
   // 首次载入，或没有未保存修改时，用已保存配置重建草稿；有草稿时保留。
   if (!S.draft.length || !dirtyCount()) S.draft = clone(S.saved.layouts);
@@ -184,6 +185,7 @@ function renderBar() {
   $("#layout-del").disabled = S.draft.length <= 1;
   setSwitch($("#sw-enabled"), S.enabled);
   setSwitch($("#sw-dry"), S.dryRun);
+  setSwitch($("#sw-strip"), S.strip);
 }
 
 function setSwitch(el, on) {
@@ -636,11 +638,17 @@ async function toggleSetting(key, el) {
   try {
     await apiPost("settings", { [key]: next });
     if (key === "enabled") S.enabled = next;
-    else S.dryRun = next;
+    else if (key === "dry_run") S.dryRun = next;
+    else S.strip = next;
     setSwitch(el, next);
     renderSide();
     onDirty(dirtyCount());
-    toast(key === "enabled" ? (next ? "已启用重排" : "已关闭重排，只追踪不改写") : next ? "已进入试运行" : "已退出试运行，重排结果会写回请求");
+    const messages = {
+      enabled: next ? "已启用重排" : "已关闭重排，只追踪不改写",
+      dry_run: next ? "已进入试运行" : "已退出试运行，重排结果会写回请求",
+      strip_reasoning: next ? "已开启：发给 DeepSeek 的请求会清空历史轮次的思考内容" : "已关闭清除历史思考",
+    };
+    toast(messages[key]);
   } catch (err) {
     toast(`修改失败：${errText(err)}`, "bad");
   }
@@ -691,7 +699,7 @@ export function init() {
     s.addEventListener("click", pick);
     s.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
   });
-  for (const [id, key] of [["#sw-enabled", "enabled"], ["#sw-dry", "dry_run"]]) {
+  for (const [id, key] of [["#sw-enabled", "enabled"], ["#sw-dry", "dry_run"], ["#sw-strip", "strip_reasoning"]]) {
     const el = $(id);
     el.addEventListener("click", () => toggleSetting(key, el));
     el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSetting(key, el); } });

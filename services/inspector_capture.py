@@ -3,6 +3,7 @@
 - 调用层：包装每个 provider 实例的 text_chat / text_chat_stream，记录模型、轮次、耗时、用量与响应。
 - 线路层：给 provider 底层的 httpx.AsyncClient 加事件钩子，记录真正发出的请求与每次重试；
   拿不到 httpx 客户端时退回包装 _query / _query_stream。
+- 发送前：包装 _finally_convert_payload，按开关清除 DeepSeek 请求里已结束轮次的思考内容。
 三层之间通过 ContextVar 关联，并发请求互不串号。
 """
 
@@ -95,6 +96,46 @@ def is_main_call(trace: Trace | None, kwargs: dict[str, Any]) -> bool:
     return func_tool is None or req is None or func_tool is getattr(req, "func_tool", None)
 
 
+def is_deepseek(provider: Any, model: str) -> bool:
+    """模型名或接口地址里带 deepseek 时视为 DeepSeek。"""
+
+    if "deepseek" in (model or "").lower():
+        return True
+    base_url = getattr(getattr(provider, "client", None), "base_url", None)
+    return "deepseek" in str(getattr(base_url, "host", "") or "").lower()
+
+
+def strip_history_reasoning(payloads: dict[str, Any]) -> int:
+    """把已结束轮次里 assistant 消息的 reasoning_content 清空，返回清空的条数。
+
+    最后一条不带工具调用的 assistant 是上一轮的最终回复，它和它之前的消息都属于已结束的轮次；
+    之后是本轮的工具调用链，DeepSeek 要求原样回传思考内容，不动。
+    字段保留为空字符串：DeepSeek V4 要求历史 assistant 消息带这个字段。
+    只替换列表里的元素，不修改原消息字典，避免影响 AstrBot 保存的对话历史。
+    """
+
+    messages = payloads.get("messages")
+    if not isinstance(messages, list):
+        return 0
+    last_final = -1
+    for index, msg in enumerate(messages):
+        if isinstance(msg, dict) and msg.get("role") == "assistant" and not msg.get("tool_calls"):
+            last_final = index
+    count = 0
+    for index in range(last_final + 1):
+        msg = messages[index]
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        if not msg.get("reasoning_content"):
+            continue
+        if msg.get("content") in (None, "", []) and not msg.get("tool_calls"):
+            # 只有思考的消息清空后会被 AstrBot 当作空消息丢掉，保留原样。
+            continue
+        messages[index] = {**msg, "reasoning_content": ""}
+        count += 1
+    return count
+
+
 def _is_own_capture(fn: Any) -> bool:
     """按代码对象识别本插件的 provider 包装，避免把复制了标记属性的外来包装当成自己的。"""
 
@@ -150,6 +191,8 @@ class ProviderCapture:
             ("text_chat_stream", self._stream_wrapper),
         ):
             count += self._patch(provider, name, factory)
+        if hasattr(provider, "_finally_convert_payload"):
+            count += self._patch(provider, "_finally_convert_payload", self._payload_wrapper)
         pid = _provider_id(provider)
         client = find_httpx_client(provider)
         if client is not None:
@@ -371,6 +414,27 @@ class ProviderCapture:
                 ):
                     final.usage = usage_chunk.usage
                 capture._end(trace, rnd, started, error, resp)
+
+        return wrapper
+
+    def _payload_wrapper(self, provider: Any, original: Any):
+        capture = self
+
+        def wrapper(payloads, *args, **kwargs):
+            result = original(payloads, *args, **kwargs)
+            if not capture.active or not capture.hub.settings.strip_reasoning:
+                return result
+            try:
+                if isinstance(payloads, dict) and is_deepseek(
+                    provider, str(payloads.get("model", ""))
+                ):
+                    count = strip_history_reasoning(payloads)
+                    rnd = CURRENT_ROUND.get()
+                    if rnd is not None and rnd.duration_ms is None:
+                        rnd.params["reasoning_stripped"] = count
+            except Exception:
+                logger.warning("提示词编排：清除历史思考失败，本次请求保持原样", exc_info=True)
+            return result
 
         return wrapper
 

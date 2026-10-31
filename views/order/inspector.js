@@ -288,6 +288,8 @@ function requestTab(rnd) {
     h("dt", { text: "模型" }), h("dd", { class: "mono", text: body.model || rnd.model }),
     h("dt", { text: "工具" }), h("dd", { text: Array.isArray(body.tools) ? `${body.tools.length} 个` : `${(rnd.params.tools || []).length} 个` }),
     h("dt", { text: "消息" }), h("dd", { text: msgs ? `${msgs.length} 条` : "—" }),
+    rnd.params.reasoning_stripped !== undefined ? h("dt", { text: "历史思考" }) : null,
+    rnd.params.reasoning_stripped !== undefined ? h("dd", { text: `发送前清空了 ${rnd.params.reasoning_stripped} 条` }) : null,
   ]));
   if (msgs) {
     const diverge = S.prev && S.prev.round === S.round ? S.prev.index : -1;

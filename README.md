@@ -85,6 +85,17 @@ git clone "https://github.com/conFess233/astrbot_plugin_prompt_order"
 
 “检查器开关”里可以修改捕获深度、旁路调用、过滤、落盘与保留策略，也可以清空记录。
 
+### 清除历史思考（仅 DeepSeek）
+
+排序页右上角的“清除历史思考”开关。开启后，发给 DeepSeek 的请求在发送前，会把已结束轮次里模型的思考内容（`reasoning_content`）清空：
+
+- 本轮工具调用链的思考保留，DeepSeek 要求在工具循环中原样回传。
+- 字段保留为空字符串，DeepSeek V4 要求历史 assistant 消息带这个字段。
+- 只改发出的请求，AstrBot 保存的对话历史不受影响；关闭开关即恢复原样。
+- 模型名或接口地址里带 `deepseek` 才生效，其他模型不处理。
+
+开启后的第一次请求，历史部分会有一次缓存未命中；之后前缀重新稳定。检查器“实际请求”里会显示每次清空了多少条。
+
 ### 改动记录与覆盖范围
 
 “改动记录”按执行顺序列出每个钩子对请求做了什么，在重排之后才发生的改动会标红。“覆盖范围”列出哪些改动能识别、能排序，以及本次运行实际检测到的情况。
@@ -102,6 +113,7 @@ git clone "https://github.com/conFess233/astrbot_plugin_prompt_order"
 | `stats_window`                              | `200`       | 每个布局按最近多少次请求统计稳定度，20～2000                                     |
 | `sample_limit`                              | `30`        | 保留多少次请求的完整片段用于预览，5～200                                         |
 | `diff_char_limit`                           | `50000`     | 某个插件整体改写 system 且超过这个长度时，整段记到该插件名下，不再逐字对比       |
+| `strip_reasoning`                           | `false`     | 清除历史思考（仅 DeepSeek）：发送前清空已结束轮次的思考内容                      |
 | `inspector.enabled`                         | `true`      | 启用检查器                                                                       |
 | `inspector.depth`                           | `wire`      | `wire` 记录实际发出的请求；`call` 只记模型、用量和轮数                           |
 | `inspector.capture_side`                    | `false`     | 记录插件自己调用模型的旁路请求                                                   |
