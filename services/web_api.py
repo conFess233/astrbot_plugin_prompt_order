@@ -190,6 +190,7 @@ class WebApi:
         q = request.query
         return {
             "since": q.get("since", None, type=float),
+            "until": q.get("until", None, type=float),
             "kind": q.get("kind", "") if q.get("kind", "") in ("main", "side") else "",
             "umo": str(q.get("umo", "") or "")[:200],
             "model": str(q.get("model", "") or "")[:200],
@@ -232,11 +233,20 @@ class WebApi:
 
     @guarded
     async def stats(self):
-        days = _int_arg("days", 1, 1, 90)
-        start = time.time() - days * 86400 if days > 1 else _today_start()
+        # 前端按浏览器本地时间算好 since/until；只给 days 时沿用旧行为。
+        since = request.query.get("since", None, type=float)
+        until = request.query.get("until", None, type=float)
+        if since is None:
+            days = _int_arg("days", 1, 1, 90)
+            since = time.time() - days * 86400 if days > 1 else _today_start()
+        if until is not None and until <= since:
+            raise ValueError("结束时间必须晚于开始时间")
+        tz = request.query.get("tz", None, type=int)
+        if tz is not None and not -900 <= tz <= 900:
+            raise ValueError("时区偏移超出范围")
         store = self.inspector.store
         memory = store.memory_summaries()
-        return json_response(await asyncio.to_thread(store.stats, start, memory))
+        return json_response(await asyncio.to_thread(store.stats, since, memory, until, tz))
 
     async def live(self):
         return stream_response(

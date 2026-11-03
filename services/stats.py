@@ -99,6 +99,16 @@ class StatsService:
             self.samples.append(sample)
             self._samples_dirty = True
 
+    def update_sample_changes(self, state_id: int, changes: list[dict[str, Any]]) -> None:
+        """补写某次请求重排之后的改动，并标记样本待写盘。"""
+
+        with self._lock:
+            for sample in reversed(self.samples):
+                if sample.get("state_id") == state_id:
+                    sample["changes"] = changes
+                    self._samples_dirty = True
+                    return
+
     def flush_samples(self) -> None:
         with self._lock:
             if not self._samples_dirty:

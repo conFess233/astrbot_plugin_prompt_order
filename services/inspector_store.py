@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -42,7 +42,11 @@ class TraceStore:
         self.retention_mb = 500
         self.recent: OrderedDict[str, Trace] = OrderedDict()
         self._pending: list[Trace] = []
+        # 已写进 jsonl、但索引还没写成功的行；下次写盘先补索引，不重复写文件。
+        self._unindexed: list[tuple] = []
         self._lock = threading.Lock()
+        # 写盘与清空互斥，避免清空后又补进指向已删文件的索引。
+        self._flush_lock = threading.Lock()
         self._conn: sqlite3.Connection | None = None
         self._task: asyncio.Task | None = None
         self._last_retention = 0.0
@@ -127,15 +131,20 @@ class TraceStore:
                 logger.warning("提示词编排：检查器写盘失败，稍后重试", exc_info=True)
 
     def _flush(self) -> None:
+        with self._flush_lock:
+            self._flush_locked()
+
+    def _flush_locked(self) -> None:
         if self._conn is None:
             return
         with self._lock:
             batch, self._pending = self._pending, []
-        if not batch:
+        if not batch and not self._unindexed:
             return
-        rows = []
-        try:
-            for trace in batch:
+        rows: list[tuple] = []
+        failed: OSError | None = None
+        for done, trace in enumerate(batch):
+            try:
                 data = trace.to_dict()
                 line = (json.dumps(data, ensure_ascii=False, default=str) + "\n").encode("utf-8")
                 day = datetime.fromtimestamp(trace.started_at).strftime("%Y-%m-%d")
@@ -143,19 +152,29 @@ class TraceStore:
                 with path.open("ab") as fh:
                     offset = fh.tell()
                     fh.write(line)
-                rows.append(_index_row(data, path.name, offset, len(line)))
+            except OSError as exc:
+                # 写失败的记录放回队列，保留在内存里等下次；已写成功的照常建索引。
+                with self._lock:
+                    self._pending = batch[done:] + self._pending
+                failed = exc
+                break
+            rows.append(_index_row(data, path.name, offset, len(line)))
+        self._unindexed.extend(rows)
+        if self._unindexed:
             with self._lock:
-                self._conn.executemany(
-                    f"INSERT OR REPLACE INTO traces ({INDEX_COLUMNS}) VALUES "
-                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    rows,
-                )
-                self._conn.commit()
-        except OSError:
-            # 写失败的记录放回队列，保留在内存里等下次。
-            with self._lock:
-                self._pending = batch[len(rows) :] + self._pending
-            raise
+                try:
+                    self._conn.executemany(
+                        f"INSERT OR REPLACE INTO traces ({INDEX_COLUMNS}) VALUES "
+                        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        self._unindexed,
+                    )
+                    self._conn.commit()
+                except sqlite3.Error:
+                    self._conn.rollback()
+                    raise
+            self._unindexed = []
+        if failed is not None:
+            raise failed
 
     def _write_inflight(self) -> None:
         if not self.persist:
@@ -249,22 +268,35 @@ class TraceStore:
             logger.warning(f"提示词编排：读取记录失败，id={trace_id}", exc_info=True)
             return None
 
-    def stats(self, since: float, memory: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-        """按天、按类型、按模型、按会话汇总；进行中的记录不计入。可在线程中调用。"""
+    def stats(
+        self,
+        since: float,
+        memory: list[dict[str, Any]] | None = None,
+        until: float | None = None,
+        tz_minutes: int | None = None,
+    ) -> dict[str, Any]:
+        """按天、按类型、按模型、按会话汇总 [since, until)；进行中的记录不计入。可在线程中调用。
+
+        tz_minutes 是页面所在时区相对 UTC 的分钟数，按天分组用它；不传时用服务器时区。
+        """
+
+        end = float("inf") if until is None else until
+        tz = None if tz_minutes is None else timezone(timedelta(minutes=tz_minutes))
 
         rows: list[tuple] = []
         seen: set[str] = set()
-        if self._conn is not None and self.persist:
+        # 关闭落盘后磁盘上的旧记录仍在列表里，汇总同样计入，两边口径一致。
+        if self._conn is not None:
             with self._lock:
                 rows = self._conn.execute(
                     "SELECT id, ts, umo, kind, models, rounds, input, cached, output, error "
-                    "FROM traces WHERE ts >= ?",
-                    (since,),
+                    "FROM traces WHERE ts >= ? AND ts < ?",
+                    (since, end),
                 ).fetchall()
             seen = {row[0] for row in rows}
         # 刚结束的记录最多要等一秒才写进索引，内存里有而索引里没有的也要算上。
         for s in self.memory_summaries() if memory is None else memory:
-            if s["started_at"] >= since and s["status"] != "open" and s["id"] not in seen:
+            if since <= s["started_at"] < end and s["status"] != "open" and s["id"] not in seen:
                 rows.append(
                     (
                         s["id"],
@@ -279,22 +311,24 @@ class TraceStore:
                         int(s["error"]),
                     )
                 )
-        by_day: dict[str, dict[str, Any]] = {}
-        by_model: dict[str, dict[str, Any]] = {}
-        by_umo: dict[str, dict[str, Any]] = {}
         total = _bucket()
         by_kind = {"main": _bucket(), "side": _bucket()}
+        # 合计与主模型 / 旁路各一套按天、按模型、按会话的拆分，页面切换范围时直接取用。
+        groups = {scope: {"by_day": {}, "by_model": {}, "by_umo": {}} for scope in ("total", "main", "side")}
         for _id, ts, umo, kind, models, rounds, inp, cached, out, err in rows:
-            day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-            for bucket in (
-                total,
-                by_kind["main" if kind == "main" else "side"],
-                by_day.setdefault(day, _bucket()),
-                by_model.setdefault(models or "-", _bucket()),
-                by_umo.setdefault(umo or "-", _bucket()),
-            ):
+            day = datetime.fromtimestamp(ts, tz).strftime("%Y-%m-%d")
+            scope = "main" if kind == "main" else "side"
+            buckets = [total, by_kind[scope]]
+            for name in ("total", scope):
+                group = groups[name]
+                buckets += [
+                    group["by_day"].setdefault(day, _bucket()),
+                    group["by_model"].setdefault(models or "-", _bucket()),
+                    group["by_umo"].setdefault(umo or "-", _bucket()),
+                ]
+            for bucket in buckets:
                 bucket["count"] += 1
-                bucket["main" if kind == "main" else "side"] += 1
+                bucket[scope] += 1
                 bucket["rounds"] += rounds or 0
                 bucket["input"] += inp or 0
                 bucket["cached"] += cached or 0
@@ -303,9 +337,8 @@ class TraceStore:
         return {
             "total": total,
             "by_kind": by_kind,
-            "by_day": by_day,
-            "by_model": by_model,
-            "by_umo": by_umo,
+            **groups["total"],
+            "by_scope": {"main": groups["main"], "side": groups["side"]},
         }
 
     def disk_usage(self) -> int:
@@ -359,17 +392,19 @@ class TraceStore:
 
     def clear_disk(self) -> int:
         count = 0
-        with self._lock:
-            self._pending.clear()
-            if self._conn is not None:
-                count = self._conn.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
-                self._conn.execute("DELETE FROM traces")
-                self._conn.commit()
-        for path in self.traces_dir.glob("*.jsonl"):
-            try:
-                path.unlink()
-            except OSError:
-                logger.warning(f"提示词编排：清空时删除文件失败，文件={path.name}")
+        with self._flush_lock:
+            with self._lock:
+                self._pending.clear()
+                self._unindexed.clear()
+                if self._conn is not None:
+                    count = self._conn.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
+                    self._conn.execute("DELETE FROM traces")
+                    self._conn.commit()
+            for path in self.traces_dir.glob("*.jsonl"):
+                try:
+                    path.unlink()
+                except OSError:
+                    logger.warning(f"提示词编排：清空时删除文件失败，文件={path.name}")
         return count
 
 
@@ -416,6 +451,9 @@ def _filter_sql(filters: dict[str, Any], before: float | None) -> tuple[str, lis
     if filters.get("since"):
         sql += " AND ts >= ?"
         args.append(float(filters["since"]))
+    if filters.get("until"):
+        sql += " AND ts < ?"
+        args.append(float(filters["until"]))
     if filters.get("kind"):
         sql += " AND kind = ?"
         args.append(filters["kind"])
@@ -466,6 +504,8 @@ def _match(summary: dict[str, Any], filters: dict[str, Any], before: float | Non
     if before is not None and summary["started_at"] >= before:
         return False
     if filters.get("since") and summary["started_at"] < float(filters["since"]):
+        return False
+    if filters.get("until") and summary["started_at"] >= float(filters["until"]):
         return False
     if filters.get("kind") and summary["kind"] != filters["kind"]:
         return False

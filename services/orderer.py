@@ -194,12 +194,8 @@ class OrderService:
         state = event.get_extra(STATE_KEY)
         if not isinstance(state, RequestState):
             return
-        late = [c.to_dict() for c in state.changes if c.after_arrange]
-        if late:
-            for sample in reversed(self.stats.samples):
-                if sample.get("state_id") == id(state):
-                    sample["changes"] = [c.to_dict() for c in state.changes]
-                    break
+        if any(c.after_arrange for c in state.changes):
+            self.stats.update_sample_changes(id(state), [c.to_dict() for c in state.changes])
 
     def _sample(self, event: Any, state: RequestState, items: RawItems, result) -> dict[str, Any]:
         message = ""

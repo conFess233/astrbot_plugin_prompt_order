@@ -1,4 +1,4 @@
-// 检查器页：今日汇总、调用列表、实时推送、详情（实际请求 / 注入来源 / 响应 / 用量 / HTTP）、开关。
+// 检查器页：日期汇总、调用列表、实时推送、详情（实际请求 / 注入来源 / 响应 / 用量 / HTTP）、开关。
 import {
   $, $$, apiGet, apiPost, bridge, btn, busy, chip, closeSheet, confirmBox, copyText, downloadText,
   errText, h, iconEl, ms, num, openSheet, ownerColor, pct, segBar, time, toast,
@@ -15,7 +15,11 @@ const S = {
   poll: null,
   filters: {},
   prev: null,
+  base: null,
+  retry: null,
 };
+// 实时插入的行最多保留这么多，页面长时间打开也不会无限增长。
+const MAX_ROWS = 500;
 const TABS = [["request", "实际请求"], ["build", "注入来源"], ["response", "响应"], ["usage", "用量"], ["http", "HTTP"]];
 
 // ---------- 汇总与列表 ----------
@@ -25,11 +29,58 @@ let scope = "total";
 try { scope = SCOPES[localStorage.getItem(SCOPE_KEY)] ? localStorage.getItem(SCOPE_KEY) : "total"; } catch { /* 浏览器存储不可用时用默认值 */ }
 let statsData = null;
 
+// 汇总日期：今日 / 本周（周一起）/ 本月 / 自定义，按浏览器本地时间换算成秒级 [since, until)。
+const RANGE_KEY = "prompt_order.ins_range";
+const RANGES = { today: "今日", week: "本周", month: "本月", custom: "区间" };
+let range = "today";
+let custom = { from: "", to: "" };
+try {
+  range = RANGES[localStorage.getItem(RANGE_KEY)] ? localStorage.getItem(RANGE_KEY) : "today";
+  custom = { ...custom, ...JSON.parse(localStorage.getItem(`${RANGE_KEY}_custom`) || "{}") };
+} catch { /* 浏览器存储不可用时用默认值 */ }
+
+const dateStr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const parseDate = (v) => { const [y, m, d] = v.split("-").map(Number); return new Date(y, m - 1, d); };
+
+function rangeParams() {
+  const now = new Date();
+  const day = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let start = day;
+  let end = null;
+  if (range === "week") start = new Date(day.getFullYear(), day.getMonth(), day.getDate() - ((day.getDay() + 6) % 7));
+  else if (range === "month") start = new Date(day.getFullYear(), day.getMonth(), 1);
+  else if (range === "custom") {
+    if (!custom.from || !custom.to) return null;
+    let [a, b] = [parseDate(custom.from), parseDate(custom.to)];
+    if (a > b) [a, b] = [b, a];
+    start = a;
+    end = new Date(b.getFullYear(), b.getMonth(), b.getDate() + 1);
+  }
+  const params = { since: start.getTime() / 1000 };
+  if (end) params.until = end.getTime() / 1000;
+  return params;
+}
+
+// 汇总按天分组用浏览器时区（分钟，东区为正）。
+const tzMinutes = () => -new Date().getTimezoneOffset();
+
+let statsSeq = 0;
 async function loadStats() {
+  const params = rangeParams();
+  if (!params) {
+    statsData = null;
+    $("#ins-stats").replaceChildren(h("p", { class: "empty", text: "选择开始和结束日期后显示汇总。" }));
+    $("#ins-breakdown").replaceChildren();
+    return;
+  }
+  const seq = ++statsSeq;
   try {
-    statsData = await apiGet("inspector/stats", { days: 1 });
+    const data = await apiGet("inspector/stats", { ...params, tz: tzMinutes() });
+    if (seq !== statsSeq) return; // 切换日期时丢弃过期的响应
+    statsData = data;
     renderStats();
   } catch (err) {
+    if (seq !== statsSeq) return;
     $("#ins-stats").replaceChildren(h("p", { class: "empty", text: `汇总读取失败：${errText(err)}` }));
   }
 }
@@ -50,11 +101,110 @@ function renderStats() {
   const rate = t.input ? t.cached / t.input : 0;
   const share = total.count ? ` · 占 ${pct(t.count / total.count)}` : "";
   $("#ins-stats").replaceChildren(
-    stat("今日调用", num(t.count), scope === "total" ? `次 · 主模型 ${t.main} · 旁路 ${t.side}` : `次${share}`),
+    stat(`${RANGES[range]}调用`, num(t.count), scope === "total" ? `次 · 主模型 ${t.main} · 旁路 ${t.side}` : `次${share}`),
     stat("输入 tokens", num(t.input), `命中 ${pct(t.input ? rate : null)}`, segBar(rate, 20, rate >= 0.7 ? "ok" : rate >= 0.4 ? "warn" : "danger")),
     stat("输出 tokens", num(t.output), "tokens"),
     stat("平均轮数", t.count ? (t.rounds / t.count).toFixed(2) : "—", `出错 ${t.errors} 次`),
   );
+  renderBreakdown();
+}
+
+// ---------- 按天趋势与按模型 / 会话拆分 ----------
+function scopeGroups() {
+  if (!statsData) return null;
+  // 旧版后端没有 by_scope 时只能显示合计的拆分。
+  return scope === "total" ? statsData : statsData.by_scope?.[scope] || statsData;
+}
+
+function rangeDays() {
+  const params = rangeParams();
+  if (!params) return [];
+  const days = [];
+  const end = params.until ? new Date(params.until * 1000 - 1) : new Date();
+  for (let d = new Date(params.since * 1000); d <= end && days.length < 400; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) days.push(dateStr(d));
+  return days;
+}
+
+function renderBreakdown() {
+  const box = $("#ins-breakdown");
+  const g = scopeGroups();
+  if (!g || !g.by_day) { box.replaceChildren(); return; }
+  const days = rangeDays();
+  const parts = [];
+  // 只有一天时趋势没有意义，只显示拆分表。
+  if (days.length > 1) parts.push(trendCard(days, g.by_day));
+  parts.push(h("div", { class: "breakdown-grid" }, [
+    breakdownCard("按模型", g.by_model || {}, (k) => (k === "-" ? "（未记录模型）" : k.split(",").join(" + "))),
+    breakdownCard("按会话", g.by_umo || {}, (k) => (k === "-" ? "旁路调用（无会话）" : k)),
+  ]));
+  box.replaceChildren(...parts);
+}
+
+function trendCard(days, byDay) {
+  const rows = days.map((day) => ({ day, ...(byDay[day] || { count: 0, input: 0, cached: 0, output: 0 }) }));
+  const max = Math.max(1, ...rows.map((r) => r.input));
+  const every = Math.ceil(rows.length / 10);
+  const tip = h("div", { class: "trend-tip", role: "status" });
+  const show = (r, col) => {
+    tip.replaceChildren(h("strong", { text: r.day }),
+      h("span", { text: `调用 ${num(r.count)} 次` }),
+      h("span", { text: `输入 ${num(r.input)} · 命中 ${pct(r.input ? r.cached / r.input : null)}` }),
+      h("span", { text: `输出 ${num(r.output)}` }));
+    tip.style.left = `${col.offsetLeft + col.offsetWidth / 2}px`;
+    tip.classList.add("on");
+  };
+  const hide = () => tip.classList.remove("on");
+  const cols = rows.map((r, i) => {
+    const hit = r.cached || 0;
+    const miss = Math.max(0, r.input - hit);
+    const col = h("div", { class: "trend-col", tabindex: "0", "aria-label": `${r.day}：输入 ${num(r.input)}，命中 ${num(hit)}，调用 ${num(r.count)} 次` }, [
+      h("div", { class: "trend-bar" }, [
+        miss ? h("i", { class: "miss", style: { height: `${(miss / max) * 100}%` } }) : null,
+        hit ? h("i", { class: "hit", style: { height: `${(hit / max) * 100}%` } }) : null,
+      ]),
+      h("span", { class: "trend-x", text: i % every === 0 || i === rows.length - 1 ? r.day.slice(5) : "" }),
+    ]);
+    col.addEventListener("mouseenter", () => show(r, col));
+    col.addEventListener("focus", () => show(r, col));
+    col.addEventListener("mouseleave", hide);
+    col.addEventListener("blur", hide);
+    return col;
+  });
+  return h("div", { class: "card card-pad trend" }, [
+    h("div", { class: "trend-head" }, [
+      h("strong", { text: "每日输入 tokens" }),
+      h("div", { class: "trend-legend" }, [h("span", {}, [h("i", { class: "hit" }), "命中缓存"]), h("span", {}, [h("i", { class: "miss" }), "未命中"])]),
+    ]),
+    h("div", { class: "trend-plot" }, [h("span", { class: "trend-max mono", text: num(max) }), h("div", { class: "trend-cols" }, cols), tip]),
+  ]);
+}
+
+function breakdownCard(title, groups, label) {
+  const TOP = 8;
+  const entries = Object.entries(groups).sort((a, b) => b[1].input - a[1].input || b[1].count - a[1].count);
+  const row = (name, b, cls = "") => h("tr", { class: cls }, [
+    h("td", { class: "bd-name", title: name, text: name }),
+    h("td", { text: num(b.count) }),
+    h("td", { text: num(b.input) }),
+    h("td", { text: pct(b.input ? b.cached / b.input : null) }),
+    h("td", { class: "col-opt", text: num(b.output) }),
+  ]);
+  const body = entries.slice(0, TOP).map(([k, b]) => row(label(k), b));
+  if (entries.length > TOP) {
+    const rest = entries.slice(TOP).reduce((acc, [, b]) => {
+      for (const key of ["count", "input", "cached", "output"]) acc[key] += b[key] || 0;
+      return acc;
+    }, { count: 0, input: 0, cached: 0, output: 0 });
+    body.push(row(`其余 ${entries.length - TOP} 项`, rest, "bd-rest"));
+  }
+  return h("div", { class: "card" }, [
+    h("div", { class: "table-tools" }, [h("strong", { text: title })]),
+    entries.length
+      ? h("div", { class: "table-wrap" }, [h("table", {}, [
+        h("thead", {}, [h("tr", {}, [h("th", { text: "名称" }), h("th", { text: "调用" }), h("th", { text: "输入" }), h("th", { text: "命中率" }), h("th", { class: "col-opt", text: "输出" })])]),
+        h("tbody", {}, body)])])
+      : h("p", { class: "empty card-pad", text: "这段时间没有调用。" }),
+  ]);
 }
 
 let statsTimer = null;
@@ -69,6 +219,34 @@ function pickScope(value) {
   renderStats();
 }
 
+function renderRange() {
+  $$("#ins-range span").forEach((s) => {
+    const on = s.dataset.range === range;
+    s.classList.toggle("on", on);
+    s.setAttribute("aria-checked", on ? "true" : "false");
+  });
+  $("#ins-range-custom").hidden = range !== "custom";
+  $("#ins-range-from").value = custom.from;
+  $("#ins-range-to").value = custom.to;
+}
+
+function pickRange(value) {
+  range = value;
+  if (range === "custom" && !custom.from && !custom.to) {
+    const today = dateStr(new Date());
+    custom = { from: today, to: today };
+  }
+  try {
+    localStorage.setItem(RANGE_KEY, range);
+    localStorage.setItem(`${RANGE_KEY}_custom`, JSON.stringify(custom));
+  } catch { /* 忽略 */ }
+  renderRange();
+  loadStats();
+  // 调用记录也按同一日期范围筛选。
+  S.filters = readFilters();
+  loadList();
+}
+
 function readFilters() {
   const form = $("#ins-filter");
   const data = new FormData(form);
@@ -79,18 +257,23 @@ function readFilters() {
     q: (data.get("q") || "").trim(),
     errors: form.elements.errors.checked ? "1" : "",
     low_hit: form.elements.low_hit.checked ? "1" : "",
+    ...(rangeParams() || {}),
   };
 }
 
+let listSeq = 0;
 export async function loadList(more = false) {
   const params = { ...S.filters, limit: 50 };
   if (more && S.items.length) params.before = S.items[S.items.length - 1].started_at;
+  const seq = more ? listSeq : ++listSeq;
   try {
     const res = await apiGet("inspector/traces", params);
+    if (seq !== listSeq) return; // 筛选条件已经变了，丢弃过期的响应
     S.items = more ? [...S.items, ...res.items] : res.items;
     renderRows(!more);
     $("#ins-more").disabled = res.items.length < 50;
   } catch (err) {
+    if (seq !== listSeq) return;
     $("#ins-rows").replaceChildren(h("tr", {}, [h("td", { colspan: "7", class: "empty", text: `读取失败：${errText(err)}` })]));
   }
 }
@@ -115,8 +298,9 @@ function rowFor(item, fresh) {
 function renderRows(animate) {
   const body = $("#ins-rows");
   if (!S.items.length) {
-    const filtered = Object.values(S.filters).some(Boolean);
-    body.replaceChildren(h("tr", {}, [h("td", { colspan: "7", class: "empty", text: filtered ? "没有符合筛选条件的记录。" : "还没有调用记录。检查器开启后，bot 每回复一次都会出现在这里。" })]));
+    const filtered = Object.entries(S.filters).some(([k, v]) => v && k !== "since" && k !== "until");
+    const text = filtered ? "没有符合筛选条件的记录。" : S.filters.since ? `${range === "custom" ? "所选日期" : RANGES[range]}还没有调用记录。` : "还没有调用记录。检查器开启后，bot 每回复一次都会出现在这里。";
+    body.replaceChildren(h("tr", {}, [h("td", { colspan: "7", class: "empty", text })]));
   } else {
     body.replaceChildren(...S.items.map((item) => rowFor(item, false)));
     if (animate) $$("tr", body).forEach((tr, k) => tr.animate([{ opacity: 0, transform: "translateY(6px)" }, { opacity: 1, transform: "none" }], { duration: 220, delay: Math.min(k, 15) * 24, easing: "cubic-bezier(.2,.8,.2,1)", fill: "backwards" }));
@@ -129,6 +313,8 @@ function renderRows(animate) {
 function matchesFilters(item) {
   const f = S.filters;
   if (f.kind && item.kind !== f.kind) return false;
+  if (f.since && item.started_at < f.since) return false;
+  if (f.until && item.started_at >= f.until) return false;
   if (f.errors || f.low_hit || f.model || f.q || f.umo) return false; // 复杂筛选下不插入，避免误显示
   return true;
 }
@@ -141,6 +327,10 @@ function onLive(msg) {
     S.items.unshift(msg);
     $("#ins-rows").prepend(rowFor(msg, true));
     if ($("#ins-rows td[colspan]")) $("#ins-rows td[colspan]").parentNode.remove();
+    if (S.items.length > MAX_ROWS) {
+      for (const old of S.items.splice(MAX_ROWS)) $(`#ins-rows tr[data-id="${CSS.escape(old.id)}"]`)?.remove();
+      $("#ins-more").disabled = false;
+    }
     $("#ins-total").textContent = `${S.items.length} 条`;
   }
   if (msg.type === "trace_end") {
@@ -156,20 +346,42 @@ function onLive(msg) {
   if (msg.type === "round_end" && S.selected === msg.trace_id) select(msg.trace_id, true);
 }
 
+// 实时连接断开后先轮询，再按 5s、10s…最长 60s 的间隔重连；重连成功后补拉一次列表。
+let retryDelay = 5000;
 async function subscribe() {
   if (S.sub || !bridge.subscribeSSE) return;
-  try {
-    S.sub = await bridge.subscribeSSE("inspector/live", {
-      onMessage: ({ parsed }) => onLive(parsed),
-      onError: () => startPolling(),
-    });
-    stopPolling();
-  } catch {
+  clearTimeout(S.retry);
+  S.retry = null;
+  let id = null;
+  let failed = false;
+  const fail = () => {
+    if (failed) return;
+    failed = true;
+    if (id && S.sub === id) S.sub = null;
+    if (id) Promise.resolve().then(() => bridge.unsubscribeSSE(id)).catch(() => {});
     startPolling();
+    S.retry = setTimeout(subscribe, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 60000);
+  };
+  try {
+    id = await bridge.subscribeSSE("inspector/live", {
+      onMessage: ({ parsed }) => {
+        retryDelay = 5000;
+        if (S.poll) { stopPolling(); renderRows(false); loadList(); }
+        onLive(parsed);
+      },
+      onError: fail,
+    });
+    if (failed) return;
+    S.sub = id;
+  } catch {
+    fail();
   }
 }
 
 async function unsubscribe() {
+  clearTimeout(S.retry);
+  S.retry = null;
   if (!S.sub) return;
   const id = S.sub;
   S.sub = null;
@@ -178,7 +390,7 @@ async function unsubscribe() {
 
 function startPolling() {
   if (S.poll) return;
-  $("#ins-foot").textContent = "实时连接中断，已改为每 5 秒刷新";
+  $("#ins-foot").textContent = "实时连接中断，每 5 秒刷新并尝试重连";
   S.poll = setInterval(() => { if (S.live) loadList(); }, 5000);
 }
 function stopPolling() {
@@ -234,8 +446,131 @@ function renderDetail() {
     h("button", { type: "button", role: "tab", "aria-selected": i === S.round ? "true" : "false", text: `第${r.index}轮 ${r.kind}${r.error ? " ✕" : ""}`, onclick: () => { S.round = i; renderDetail(); } })));
   const tabs = h("div", { class: "subtabs", role: "tablist", "aria-label": "详情" }, TABS.map(([key, label]) =>
     h("button", { type: "button", role: "tab", "aria-selected": key === S.tab ? "true" : "false", text: label, onclick: () => { S.tab = key; renderDetail(); } })));
-  side.replaceChildren(h("div", { class: "side-body" }, [head, h("h3", { text: d.title || "（无消息文本）" }), meta,
+  side.replaceChildren(h("div", { class: "side-body" }, [head, h("h3", { text: d.title || "（无消息文本）" }), meta, baseBar(d),
     rounds.length > 1 ? roundTabs : null, tabs, h("div", { id: "ins-tab" }, tabContent(S.tab))]));
+}
+
+// ---------- 任选两条记录对比 SYSTEM ----------
+function baseBar(d) {
+  const base = S.base;
+  if (base && base.id === d.id) {
+    return h("div", { class: "base-bar" }, [chip("对比基准", "info"), h("span", { class: "grow", text: "再选另一条记录即可对比" }),
+      btn("取消基准", { onClick: () => { S.base = null; renderDetail(); } })]);
+  }
+  const items = [btn(base ? "换成这条作基准" : "设为对比基准", { onClick: () => { S.base = d; renderDetail(); toast("已设为对比基准，选另一条记录后点“与基准对比”"); } })];
+  if (base) items.unshift(btn("与基准对比", { cls: "btn btn-tonal btn-sm", iconName: "layers", onClick: () => openCompare(base, d) }), h("span", { class: "grow mono", text: `基准 ${time(base.started_at, true)}` }));
+  return h("div", { class: "base-bar" }, items);
+}
+
+const partsText = (content) => (typeof content === "string" ? content
+  : Array.isArray(content) ? content.map((p) => (typeof p === "string" ? p : p && typeof p.text === "string" ? p.text : "")).join("")
+    : content ? JSON.stringify(content) : "");
+
+// 取第一轮实际发出的 SYSTEM；没有线路层记录时退回重排后的 SYSTEM。
+function systemOf(d) {
+  const rnd = (d.round_list || [])[0];
+  const body = rnd ? requestBody(rnd).body : null;
+  if (body) {
+    if (body.system !== undefined) return { text: partsText(body.system), source: "实际请求的 system 字段" };
+    const msgs = Array.isArray(body.messages) ? body.messages : Array.isArray(body.contexts) ? body.contexts : null;
+    if (msgs && msgs[0] && msgs[0].role === "system") return { text: partsText(msgs[0].content), source: "实际请求的第 0 条消息" };
+    if (typeof body.system_prompt === "string") return { text: body.system_prompt, source: "调用层入参" };
+  }
+  if (d.build && typeof d.build.after_system === "string") return { text: d.build.after_system, source: "重排后的 SYSTEM" };
+  return null;
+}
+
+function toolsOf(d) {
+  const rnd = (d.round_list || [])[0];
+  if (!rnd) return null;
+  const body = requestBody(rnd).body;
+  if (body && Array.isArray(body.tools)) return body.tools.map((t) => (t.function && t.function.name) || t.name || "?");
+  return rnd.params && Array.isArray(rnd.params.tools) ? rnd.params.tools : null;
+}
+
+// 按行求最长公共子序列；行数太多时只报告首个不同的位置。
+const DIFF_LIMIT = 1500;
+function lineDiff(a, b) {
+  const x = a.split("\n");
+  const y = b.split("\n");
+  if (x.length > DIFF_LIMIT || y.length > DIFF_LIMIT) return null;
+  const n = x.length;
+  const m = y.length;
+  const w = m + 1;
+  const dp = new Uint16Array((n + 1) * w);
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      dp[i * w + j] = x[i] === y[j] ? dp[(i + 1) * w + j + 1] + 1 : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && x[i] === y[j]) { out.push(["same", x[i]]); i += 1; j += 1; }
+    else if (i < n && (j >= m || dp[(i + 1) * w + j] >= dp[i * w + j + 1])) { out.push(["del", x[i]]); i += 1; }
+    else { out.push(["add", y[j]]); j += 1; }
+  }
+  return out;
+}
+
+function diffView(ops) {
+  const lines = [];
+  const CONTEXT = 3;
+  for (let k = 0; k < ops.length;) {
+    if (ops[k][0] !== "same") { lines.push(ops[k]); k += 1; continue; }
+    let end = k;
+    while (end < ops.length && ops[end][0] === "same") end += 1;
+    const run = ops.slice(k, end);
+    // 相同的长段只留前后几行上下文。
+    const head = k === 0 ? 0 : CONTEXT;
+    const tail = end === ops.length ? 0 : CONTEXT;
+    if (run.length > head + tail + 1) {
+      lines.push(...run.slice(0, head), ["skip", `… ${run.length - head - tail} 行相同 …`], ...run.slice(run.length - tail));
+    } else lines.push(...run);
+    k = end;
+  }
+  const mark = { same: "  ", add: "+ ", del: "- ", skip: "" };
+  return h("pre", { class: "code diff" }, lines.map(([kind, text]) => h("span", { class: kind, text: `${mark[kind]}${text}` || " " })));
+}
+
+function openCompare(a, b) {
+  const sa = systemOf(a);
+  const sb = systemOf(b);
+  const label = (d) => `${time(d.started_at, true)} · ${d.kind === "side" ? "旁路调用" : d.umo || "—"}`;
+  const head = h("dl", { class: "kv" }, [
+    h("dt", { text: "基准（−）" }), h("dd", { text: `${label(a)}${sa ? ` · ${sa.source}` : ""}` }),
+    h("dt", { text: "对比（+）" }), h("dd", { text: `${label(b)}${sb ? ` · ${sb.source}` : ""}` }),
+  ]);
+  const out = [head];
+  if (!sa || !sb) {
+    out.push(h("p", { class: "empty", text: "其中一条没有记录到 SYSTEM 内容，无法对比。" }));
+    openSheet("对比两次调用", out, { single: true });
+    return;
+  }
+  let prefix = 0;
+  while (prefix < sa.text.length && prefix < sb.text.length && sa.text[prefix] === sb.text[prefix]) prefix += 1;
+  const same = sa.text === sb.text;
+  const line = sb.text.slice(0, prefix).split("\n").length;
+  const notes = [same
+    ? "SYSTEM 完全相同。"
+    : `前 ${num(prefix)} 字相同（占对比方的 ${pct(sb.text.length ? prefix / sb.text.length : 0)}），从第 ${line} 行开始不同；这之后的内容无法命中缓存。`];
+  const ta = toolsOf(a);
+  const tb = toolsOf(b);
+  if (ta && tb) {
+    const added = tb.filter((t) => !ta.includes(t));
+    const removed = ta.filter((t) => !tb.includes(t));
+    if (added.length || removed.length) notes.push(`工具不同：${added.length ? `新增 ${added.join("、")}` : ""}${added.length && removed.length ? "；" : ""}${removed.length ? `移除 ${removed.join("、")}` : ""}。工具在提示词最前面，整个缓存都会失效。`);
+    else if (ta.join() !== tb.join()) notes.push("工具相同但顺序不同，整个缓存都会失效。");
+    else notes.push(`工具一致（${tb.length} 个）。`);
+  }
+  out.push(h("ul", { class: "warn-list" }, notes.map((text) => h("li", { class: same && notes.length === 1 ? "" : "warn" }, [iconEl("info"), h("span", { text })]))));
+  if (!same) {
+    const ops = lineDiff(sa.text, sb.text);
+    out.push(h("div", { class: "field", text: "SYSTEM 逐行对比" }));
+    out.push(ops ? diffView(ops) : h("p", { class: "empty", text: `内容超过 ${DIFF_LIMIT} 行，不做逐行对比；首个不同在第 ${line} 行。` }));
+  }
+  openSheet("对比两次调用", out, { single: true });
 }
 
 function toggleWide() {
@@ -517,7 +852,17 @@ export async function show() {
       s.addEventListener("click", () => pickScope(s.dataset.scope));
       s.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickScope(s.dataset.scope); } });
     });
+    $$("#ins-range span").forEach((s) => {
+      s.addEventListener("click", () => pickRange(s.dataset.range));
+      s.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickRange(s.dataset.range); } });
+    });
+    ["from", "to"].forEach((key) => $(`#ins-range-${key}`).addEventListener("change", (e) => {
+      custom = { ...custom, [key]: e.currentTarget.value };
+      pickRange("custom");
+    }));
+    renderRange();
     renderStats();
+    S.filters = readFilters();
     await Promise.all([loadStats(), loadList()]);
     renderDetail();
   }
@@ -525,16 +870,26 @@ export async function show() {
 }
 
 export function refresh() {
+  S.filters = readFilters();
   return Promise.all([loadStats(), loadList()]);
 }
 
 export function init() {
-  $("#ins-filter").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    S.filters = readFilters();
-    const submit = e.currentTarget.querySelector("[type=submit]");
-    await busy(submit, "查询中", () => loadList());
+  // 筛选条件一改就查询：文本框停顿 300ms 后查，下拉框和勾选框立即查，回车也立即查。
+  const form = $("#ins-filter");
+  let typing = null;
+  const query = () => {
+    clearTimeout(typing);
+    const next = readFilters();
+    if (JSON.stringify(next) === JSON.stringify(S.filters)) return;
+    S.filters = next;
+    loadList();
+  };
+  form.addEventListener("submit", (e) => { e.preventDefault(); query(); });
+  form.addEventListener("input", (e) => {
+    if (e.target.matches("input[type=text], input:not([type])")) { clearTimeout(typing); typing = setTimeout(query, 300); }
   });
+  form.addEventListener("change", (e) => { if (!e.target.matches("input[type=text], input:not([type])")) query(); });
   $("#ins-more").addEventListener("click", (e) => busy(e.currentTarget, "加载中", () => loadList(true)));
   $("#ins-live").addEventListener("click", (e) => {
     S.live = !S.live;

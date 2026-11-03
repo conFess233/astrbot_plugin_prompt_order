@@ -86,10 +86,18 @@
       <!-- 检查器 -->
       <section class="view" id="view-inspector" aria-labelledby="h-inspector">
         <div class="stats-head">
-          <span class="stats-title">今日汇总</span>
+          <div class="stats-range">
+            <div class="segmented" id="ins-range" role="radiogroup" aria-label="汇总日期"><span data-range="today" role="radio" tabindex="0">今日</span><span data-range="week" role="radio" tabindex="0">本周</span><span data-range="month" role="radio" tabindex="0">本月</span><span data-range="custom" role="radio" tabindex="0">自定义</span></div>
+            <div class="range-custom" id="ins-range-custom" hidden>
+              <input class="input" type="date" id="ins-range-from" aria-label="开始日期" />
+              <span>至</span>
+              <input class="input" type="date" id="ins-range-to" aria-label="结束日期" />
+            </div>
+          </div>
           <div class="segmented" id="ins-scope" role="radiogroup" aria-label="汇总范围"><span data-scope="total" role="radio" tabindex="0">合计</span><span data-scope="main" role="radio" tabindex="0">主模型</span><span data-scope="side" role="radio" tabindex="0">旁路调用</span></div>
         </div>
         <section class="stats" id="ins-stats"></section>
+        <section class="ins-breakdown" id="ins-breakdown" aria-label="用量拆分"></section>
         <div class="section-head">
           <h2 id="h-inspector">调用记录</h2>
           <div class="head-actions">
@@ -107,7 +115,6 @@
                 <label class="field">模型<input class="input" name="model" placeholder="精确匹配" /></label>
                 <label class="field">类型<select class="input" name="kind"><option value="">全部</option><option value="main">主对话</option><option value="side">旁路调用</option></select></label>
                 <label class="field">搜索<input class="input" name="q" placeholder="消息内容或会话" /></label>
-                <button class="btn btn-primary" type="submit" data-i="search">查询</button>
               </div>
               <div class="filter-checks">
                 <label><input type="checkbox" name="errors" /> 只看出错</label>
