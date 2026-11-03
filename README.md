@@ -3,7 +3,7 @@
 <p align="center">自动识别每个插件注入的提示词片段，按你拖拽排好的顺序发出，让前缀缓存更稳定；附带可以实时监控的调用检查器。</p>
 
 <p align="center">
-  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.1.2-blue" alt="Version 0.1.2"></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.1.5-blue" alt="Version 0.1.5"></a>
   <img src="https://img.shields.io/badge/AstrBot-%3E%3D4.29.0-6c5ce7" alt="AstrBot >=4.29.0">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-green" alt="License AGPL-3.0"></a>
 </p>
@@ -73,7 +73,9 @@ git clone "https://github.com/conFess233/astrbot_plugin_prompt_order"
 
 ### 检查器
 
-列出每次调用：会话、模型、轮数、输入 tokens 与命中率、耗时。点击一行查看详情：
+顶部汇总可在“今日 / 本周 / 本月 / 自定义”之间切换日期范围，并按“合计 / 主模型 / 旁路调用”查看调用次数、输入与命中率、输出和平均轮数；范围跨多天时显示每日输入 tokens 趋势（命中 / 未命中），下方附按模型、按会话的拆分。
+
+调用列表按同一日期范围列出每次调用：会话、模型、轮数、输入 tokens 与命中率、耗时。筛选条件改动后自动查询。点击一行查看详情：
 
 | 子标签   | 内容                                                                                                   |
 | -------- | ------------------------------------------------------------------------------------------------------ |
@@ -82,6 +84,8 @@ git clone "https://github.com/conFess233/astrbot_plugin_prompt_order"
 | 响应     | 回复正文、思考内容、工具调用、结束原因                                                                 |
 | 用量     | 统一用量与供应商原始 usage；“找出前缀从哪里开始不同”会对比同会话上一次调用，直接说明这一轮为什么没命中 |
 | HTTP     | 每一次尝试（包括 SDK 自动重试）的地址、状态码、耗时、脱敏后的请求头                                    |
+
+详情里点“设为对比基准”，再打开另一条记录点“与基准对比”，可以看到两次调用的 SYSTEM 从哪一行开始不同、工具列表是否变化，以及逐行差异。
 
 “检查器开关”里可以修改捕获深度、旁路调用、过滤、落盘与保留策略，也可以清空记录。
 
