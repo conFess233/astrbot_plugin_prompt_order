@@ -25,7 +25,8 @@ KEPT_RESPONSE_HEADERS = (
     "openai-processing-ms",
 )
 _DATA_URI = re.compile(r"^data:([\w.+/-]+);base64,(.*)$", re.S)
-_LONG_B64 = re.compile(r"^[A-Za-z0-9+/=\s]{4096,}$")
+# 含 URL 安全字母表（- 与 _）：Gemini SDK 发出的 inlineData.data 用的就是它。
+_LONG_B64 = re.compile(r"^[A-Za-z0-9+/=_\-\s]{4096,}$")
 
 
 def redact_headers(headers: Any) -> dict[str, str]:

@@ -39,6 +39,7 @@ class Settings:
     sample_limit: int = 30
     diff_char_limit: int = 50000
     strip_reasoning: bool = False
+    strip_history_images: bool = False
     inspector: InspectorSettings = InspectorSettings()
 
 
@@ -126,6 +127,7 @@ def load(config: Any) -> Settings:
         sample_limit=_int(cfg.get("sample_limit", 30), "sample_limit", 30),
         diff_char_limit=_int(cfg.get("diff_char_limit", 50000), "diff_char_limit", 50000),
         strip_reasoning=bool(cfg.get("strip_reasoning", False)),
+        strip_history_images=bool(cfg.get("strip_history_images", False)),
         inspector=inspector,
     )
 
@@ -165,12 +167,12 @@ def apply_inspector_patch(config: Any, patch: Any) -> list[str]:
 
 
 def apply_top_patch(config: Any, patch: Any) -> list[str]:
-    """页面上的“启用重排 / 试运行 / 清除历史思考”三个总开关。"""
+    """页面上的总开关：启用重排、试运行、清除历史思考、省略历史图片。"""
 
     if not isinstance(patch, dict):
         raise ValueError("提交内容必须是对象")
     changed = []
-    for key in ("enabled", "dry_run", "strip_reasoning"):
+    for key in ("enabled", "dry_run", "strip_reasoning", "strip_history_images"):
         if key in patch:
             if not isinstance(patch[key], bool):
                 raise ValueError(f"{key} 必须是布尔值")

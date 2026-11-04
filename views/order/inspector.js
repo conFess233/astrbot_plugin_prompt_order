@@ -625,6 +625,8 @@ function requestTab(rnd) {
     h("dt", { text: "消息" }), h("dd", { text: msgs ? `${msgs.length} 条` : "—" }),
     rnd.params.reasoning_stripped !== undefined ? h("dt", { text: "历史思考" }) : null,
     rnd.params.reasoning_stripped !== undefined ? h("dd", { text: `发送前清空了 ${rnd.params.reasoning_stripped} 条` }) : null,
+    rnd.params.images_stripped !== undefined ? h("dt", { text: "历史图片" }) : null,
+    rnd.params.images_stripped !== undefined ? h("dd", { text: `发送前换成占位 ${rnd.params.images_stripped} 张` }) : null,
   ]));
   if (msgs) {
     const diverge = S.prev && S.prev.round === S.round ? S.prev.index : -1;

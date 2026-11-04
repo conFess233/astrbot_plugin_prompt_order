@@ -41,6 +41,7 @@ export async function load() {
   S.enabled = data.enabled;
   S.dryRun = data.dry_run;
   S.strip = Boolean(data.strip_reasoning);
+  S.images = Boolean(data.strip_history_images);
   S.wrapped = data.wrapped_hooks;
   // 首次载入，或没有未保存修改时，用已保存配置重建草稿；有草稿时保留。
   if (!S.draft.length || !dirtyCount()) S.draft = clone(S.saved.layouts);
@@ -186,6 +187,7 @@ function renderBar() {
   setSwitch($("#sw-enabled"), S.enabled);
   setSwitch($("#sw-dry"), S.dryRun);
   setSwitch($("#sw-strip"), S.strip);
+  setSwitch($("#sw-images"), S.images);
 }
 
 function setSwitch(el, on) {
@@ -639,7 +641,8 @@ async function toggleSetting(key, el) {
     await apiPost("settings", { [key]: next });
     if (key === "enabled") S.enabled = next;
     else if (key === "dry_run") S.dryRun = next;
-    else S.strip = next;
+    else if (key === "strip_reasoning") S.strip = next;
+    else S.images = next;
     setSwitch(el, next);
     renderSide();
     onDirty(dirtyCount());
@@ -647,6 +650,7 @@ async function toggleSetting(key, el) {
       enabled: next ? "已启用重排" : "已关闭重排，只追踪不改写",
       dry_run: next ? "已进入试运行" : "已退出试运行，重排结果会写回请求",
       strip_reasoning: next ? "已开启：发给 DeepSeek 的请求会清空历史轮次的思考内容" : "已关闭清除历史思考",
+      strip_history_images: next ? "已开启：历史轮次的图片会换成文字占位" : "已关闭省略历史图片",
     };
     toast(messages[key]);
   } catch (err) {
@@ -699,7 +703,7 @@ export function init() {
     s.addEventListener("click", pick);
     s.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
   });
-  for (const [id, key] of [["#sw-enabled", "enabled"], ["#sw-dry", "dry_run"], ["#sw-strip", "strip_reasoning"]]) {
+  for (const [id, key] of [["#sw-enabled", "enabled"], ["#sw-dry", "dry_run"], ["#sw-strip", "strip_reasoning"], ["#sw-images", "strip_history_images"]]) {
     const el = $(id);
     el.addEventListener("click", () => toggleSetting(key, el));
     el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSetting(key, el); } });

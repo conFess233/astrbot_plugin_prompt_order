@@ -3,7 +3,8 @@
 - 调用层：包装每个 provider 实例的 text_chat / text_chat_stream，记录模型、轮次、耗时、用量与响应。
 - 线路层：给 provider 底层的 httpx.AsyncClient 加事件钩子，记录真正发出的请求与每次重试；
   拿不到 httpx 客户端时退回包装 _query / _query_stream。
-- 发送前：包装 _finally_convert_payload，按开关清除 DeepSeek 请求里已结束轮次的思考内容。
+- 发送前：包装 _finally_convert_payload（OpenAI 兼容）与 _prepare_conversation（Gemini），
+  按开关清除已结束轮次的思考内容（仅 DeepSeek）、把已结束轮次的图片换成文字占位。
 三层之间通过 ContextVar 关联，并发请求互不串号。
 """
 
@@ -30,6 +31,8 @@ from ..utils.redact import (
 CURRENT_TRACE: ContextVar[Trace | None] = ContextVar("po_trace", default=None)
 CURRENT_ROUND: ContextVar[Round | None] = ContextVar("po_round", default=None)
 TEXT_LIMIT = 4000
+# 固定文字，保证每次请求里的占位完全一致，不破坏缓存前缀。
+IMAGE_PLACEHOLDER = "[图片：历史图片已省略]"
 _OWN_DIR = __file__.rsplit("services", 1)[0]
 
 
@@ -117,12 +120,8 @@ def strip_history_reasoning(payloads: dict[str, Any]) -> int:
     messages = payloads.get("messages")
     if not isinstance(messages, list):
         return 0
-    last_final = -1
-    for index, msg in enumerate(messages):
-        if isinstance(msg, dict) and msg.get("role") == "assistant" and not msg.get("tool_calls"):
-            last_final = index
     count = 0
-    for index in range(last_final + 1):
+    for index in range(_last_final_reply(messages) + 1):
         msg = messages[index]
         if not isinstance(msg, dict) or msg.get("role") != "assistant":
             continue
@@ -134,6 +133,49 @@ def strip_history_reasoning(payloads: dict[str, Any]) -> int:
         messages[index] = {**msg, "reasoning_content": ""}
         count += 1
     return count
+
+
+def strip_history_images(payloads: dict[str, Any]) -> int:
+    """把已结束轮次里的图片换成固定的文字占位，返回替换的张数。
+
+    分界与清除历史思考相同：本轮的用户消息和工具返回的图片保留。
+    换成新列表、新消息字典，不修改 AstrBot 传进来的对象。
+    """
+
+    messages = payloads.get("messages")
+    if not isinstance(messages, list):
+        return 0
+    result = list(messages)
+    count = 0
+    for index in range(_last_final_reply(messages) + 1):
+        msg = messages[index]
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        parts = []
+        replaced = 0
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                parts.append({"type": "text", "text": IMAGE_PLACEHOLDER})
+                replaced += 1
+            else:
+                parts.append(part)
+        if replaced:
+            result[index] = {**msg, "content": parts}
+            count += replaced
+    if count:
+        payloads["messages"] = result
+    return count
+
+
+def _last_final_reply(messages: list[Any]) -> int:
+    """最后一条不带工具调用的 assistant（上一轮的最终回复）的位置，没有时返回 -1。"""
+
+    last = -1
+    for index, msg in enumerate(messages):
+        if isinstance(msg, dict) and msg.get("role") == "assistant" and not msg.get("tool_calls"):
+            last = index
+    return last
 
 
 def _is_own_capture(fn: Any) -> bool:
@@ -193,6 +235,8 @@ class ProviderCapture:
             count += self._patch(provider, name, factory)
         if hasattr(provider, "_finally_convert_payload"):
             count += self._patch(provider, "_finally_convert_payload", self._payload_wrapper)
+        if hasattr(provider, "_prepare_conversation"):
+            count += self._patch(provider, "_prepare_conversation", self._conversation_wrapper)
         pid = _provider_id(provider)
         client = find_httpx_client(provider)
         if client is not None:
@@ -417,24 +461,45 @@ class ProviderCapture:
 
         return wrapper
 
+    def _trim_payload(self, provider: Any, payloads: Any, reasoning: bool) -> None:
+        """按开关修整即将发出的消息；出错时保持原样。"""
+
+        settings = self.hub.settings
+        if not self.active or not isinstance(payloads, dict):
+            return
+        try:
+            notes = {}
+            if settings.strip_history_images:
+                notes["images_stripped"] = strip_history_images(payloads)
+            if (
+                reasoning
+                and settings.strip_reasoning
+                and is_deepseek(provider, str(payloads.get("model", "")))
+            ):
+                notes["reasoning_stripped"] = strip_history_reasoning(payloads)
+            rnd = CURRENT_ROUND.get()
+            if notes and rnd is not None and rnd.duration_ms is None:
+                rnd.params.update(notes)
+        except Exception:
+            logger.warning("提示词编排：修整历史消息失败，本次请求保持原样", exc_info=True)
+
     def _payload_wrapper(self, provider: Any, original: Any):
         capture = self
 
         def wrapper(payloads, *args, **kwargs):
             result = original(payloads, *args, **kwargs)
-            if not capture.active or not capture.hub.settings.strip_reasoning:
-                return result
-            try:
-                if isinstance(payloads, dict) and is_deepseek(
-                    provider, str(payloads.get("model", ""))
-                ):
-                    count = strip_history_reasoning(payloads)
-                    rnd = CURRENT_ROUND.get()
-                    if rnd is not None and rnd.duration_ms is None:
-                        rnd.params["reasoning_stripped"] = count
-            except Exception:
-                logger.warning("提示词编排：清除历史思考失败，本次请求保持原样", exc_info=True)
+            capture._trim_payload(provider, payloads, reasoning=True)
             return result
+
+        return wrapper
+
+    def _conversation_wrapper(self, provider: Any, original: Any):
+        capture = self
+
+        async def wrapper(payloads, *args, **kwargs):
+            # Gemini 由这里把 OpenAI 格式的消息转成 Content；历史图片在这一步才从磁盘读出。
+            capture._trim_payload(provider, payloads, reasoning=False)
+            return await original(payloads, *args, **kwargs)
 
         return wrapper
 

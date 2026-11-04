@@ -106,7 +106,7 @@ class InspectorService:
 
     def open_main(self, event: Any, state: Any, req: Any) -> Trace | None:
         umo = state.umo
-        # 清除历史思考也依赖 provider 包装，不记录的会话同样要补装。
+        # 清除历史思考、省略历史图片也依赖 provider 包装，不记录的会话同样要补装。
         self.refresh()
         if not self._wanted(umo):
             CURRENT_TRACE.set(None)

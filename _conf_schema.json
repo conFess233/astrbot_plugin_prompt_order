@@ -35,6 +35,12 @@
     "description": "清除历史思考（仅 DeepSeek）",
     "hint": "发送前把已结束轮次里模型的思考内容清空，减少输入 tokens；本轮工具调用链的思考保留，保存的对话历史不受影响。开启后第一次请求会有一次缓存未命中。"
   },
+  "strip_history_images": {
+    "type": "bool",
+    "default": false,
+    "description": "省略历史图片",
+    "hint": "发送前把已结束轮次里的图片换成文字占位“[图片：历史图片已省略]”，本轮的图片和工具返回的图片保留；保存的对话历史不受影响。支持 OpenAI 兼容与 Gemini 接口。开启后模型看不到旧图，需要时靠识图插件的回看工具。"
+  },
   "inspector": {
     "type": "object",
     "description": "调用检查器",

@@ -2,7 +2,7 @@ name: astrbot_plugin_prompt_order
 display_name: 提示词编排
 desc: 自动识别每个插件注入的提示词片段，按拖拽排好的顺序重排后发出，提高前缀缓存命中；附带可实时监控、可落盘的调用检查器。
 short_desc: 按固定顺序重排提示词片段，并查看实际发出的请求。
-version: 0.1.5
+version: 0.1.6
 author: confess233
 repo: https://github.com/conFess233/astrbot_plugin_prompt_order
 astrbot_version: ">=4.29.0"

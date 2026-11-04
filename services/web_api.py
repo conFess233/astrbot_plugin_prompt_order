@@ -66,7 +66,7 @@ class WebApi:
     def register(self) -> None:
         routes = (
             ("state", self.state, ["GET"], "读取布局、开关与包装状态"),
-            ("settings", self.update_settings, ["POST"], "修改重排、试运行与清除历史思考开关"),
+            ("settings", self.update_settings, ["POST"], "修改重排、试运行与历史修整开关"),
             ("report", self.report, ["POST"], "布局草稿的统计与警告"),
             ("samples", self.samples, ["GET"], "最近请求样本列表"),
             ("sample", self.sample, ["GET"], "单个样本的原始条目与改动记录"),
@@ -97,6 +97,7 @@ class WebApi:
                 "enabled": settings.enabled,
                 "dry_run": settings.dry_run,
                 "strip_reasoning": settings.strip_reasoning,
+                "strip_history_images": settings.strip_history_images,
                 "config": self.order.store.snapshot(),
                 "wrapped_hooks": len(self.order.wrapper._wrapped),
             }

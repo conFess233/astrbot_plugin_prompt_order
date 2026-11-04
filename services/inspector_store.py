@@ -314,7 +314,10 @@ class TraceStore:
         total = _bucket()
         by_kind = {"main": _bucket(), "side": _bucket()}
         # 合计与主模型 / 旁路各一套按天、按模型、按会话的拆分，页面切换范围时直接取用。
-        groups = {scope: {"by_day": {}, "by_model": {}, "by_umo": {}} for scope in ("total", "main", "side")}
+        groups = {
+            scope: {"by_day": {}, "by_model": {}, "by_umo": {}}
+            for scope in ("total", "main", "side")
+        }
         for _id, ts, umo, kind, models, rounds, inp, cached, out, err in rows:
             day = datetime.fromtimestamp(ts, tz).strftime("%Y-%m-%d")
             scope = "main" if kind == "main" else "side"
