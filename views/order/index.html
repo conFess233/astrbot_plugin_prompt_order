@@ -23,6 +23,7 @@
           <span class="pill" aria-hidden="true"></span>
           <button type="button" data-view="arrange" data-i="layers" aria-current="page">排序<span id="badge-arrange" class="badge" hidden></span></button>
           <button type="button" data-view="inspector" data-i="pulse">检查器</button>
+          <button type="button" data-view="compact" data-i="list">历史压缩</button>
           <button type="button" data-view="changes" data-i="history">改动记录</button>
           <button type="button" data-view="coverage" data-i="shield">覆盖范围</button>
         </nav>
@@ -40,6 +41,7 @@
             <label class="toggle" title="开启时只计算重排结果，不写回请求"><span class="switch" id="sw-dry" role="switch" tabindex="0" aria-label="试运行"></span>试运行</label>
             <label class="toggle" title="仅 DeepSeek：发送前清空已结束轮次的模型思考内容，不影响保存的对话历史"><span class="switch" id="sw-strip" role="switch" tabindex="0" aria-label="清除历史思考"></span>清除历史思考</label>
             <label class="toggle" title="把已结束轮次里的图片换成文字占位，本轮的图片保留；支持 OpenAI 兼容与 Gemini 接口"><span class="switch" id="sw-images" role="switch" tabindex="0" aria-label="省略历史图片"></span>省略历史图片</label>
+            <label class="toggle" title="发送前把本轮不存档片段里的 JSON 去掉多余空白，内容不变"><span class="switch" id="sw-json" role="switch" tabindex="0" aria-label="压缩 JSON"></span>压缩 JSON</label>
           </div>
         </div>
         <div class="ruler"></div>
@@ -64,7 +66,8 @@
               <div id="library" class="lib-groups"></div>
             </section>
             <section class="card card-pad zone-card" aria-labelledby="h-system">
-              <div class="card-title"><div><h3 id="h-system">SYSTEM 区</h3><p>会被缓存。放常驻且内容不变的片段，越靠前越稳定越好。</p></div></div>
+              <div class="card-title"><div><h3 id="h-system">SYSTEM 区</h3><p>会被缓存。放常驻且内容不变的片段，越靠前越稳定越好。</p></div>
+                <button class="btn btn-ghost btn-sm" type="button" id="note-new" data-i="plus" title="自己写一段固定说明放进 SYSTEM 区，可配合改写规则把本轮片段里的同类说明删掉">常驻说明</button></div>
               <ol class="zone" id="zone-system" data-zone="system" aria-label="SYSTEM 区片段"></ol>
             </section>
             <section class="card card-pad zone-card" aria-labelledby="h-tail">
@@ -140,6 +143,31 @@
       </section>
 
       <!-- 改动记录 -->
+      <section class="view" id="view-compact" aria-labelledby="h-compact">
+        <div class="section-head">
+          <h2 id="h-compact">历史压缩</h2>
+          <div class="head-actions">
+            <label class="toggle" title="关闭后不压缩、不提炼"><span class="switch" id="cp-enabled" role="switch" tabindex="0" aria-label="启用历史压缩"></span>启用</label>
+            <label class="toggle" title="开启时只计算压缩效果并照常提炼，不改写历史"><span class="switch" id="cp-dry" role="switch" tabindex="0" aria-label="试运行"></span>试运行</label>
+            <label class="toggle" title="把历史消息里的 system_reminder 压成 [昵称(ID) 时间]"><span class="switch" id="cp-reminders" role="switch" tabindex="0" aria-label="压缩提醒块"></span>压缩提醒块</label>
+            <label class="toggle" title="已结束回合的长工具结果：有摘要用摘要，没有就按规则截取"><span class="switch" id="cp-tools" role="switch" tabindex="0" aria-label="压缩工具结果"></span>压缩工具结果</label>
+          </div>
+        </div>
+        <div class="ruler"></div>
+        <div class="stats-head">
+          <div class="stats-range" id="cp-notes"></div>
+          <label class="field">范围<select id="cp-days" class="input"><option value="1">最近 1 天</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option></select></label>
+        </div>
+        <section class="stats" id="cp-stats"></section>
+        <div class="layout" id="cp-layout">
+          <div class="card">
+            <div class="table-tools"><div><strong>最近提炼</strong><span>回合结束后把长工具结果提炼成笔记，下一轮替换进历史；提炼模型和门槛在插件配置里设置</span></div></div>
+            <div class="table-wrap"><table><thead><tr><th>时间</th><th>问题 / 工具</th><th class="col-opt">字数</th><th class="col-opt">耗时</th><th>结果</th></tr></thead><tbody id="cp-rows"></tbody></table></div>
+          </div>
+          <aside class="side"><div class="card side-card" id="cp-side"></div></aside>
+        </div>
+      </section>
+
       <section class="view" id="view-changes" aria-labelledby="h-changes">
         <div class="section-head"><h2 id="h-changes">钩子改动记录</h2></div>
         <div class="ruler"></div>

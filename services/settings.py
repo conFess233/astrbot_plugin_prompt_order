@@ -32,6 +32,21 @@ class InspectorSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class CompactSettings:
+    enabled: bool = True
+    dry_run: bool = True
+    reminders: bool = True
+    tool_results: bool = True
+    distill_provider_id: str = ""
+    digest_max_chars: int = 500
+    wait_seconds: int = 4
+    min_chars: int = 600
+    block_min_chars: int = 1200
+    snippet_chars: int = 150
+    exclude_tools: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     enabled: bool = True
     dry_run: bool = True
@@ -40,7 +55,9 @@ class Settings:
     diff_char_limit: int = 50000
     strip_reasoning: bool = False
     strip_history_images: bool = False
+    minify_json: bool = True
     inspector: InspectorSettings = InspectorSettings()
+    compact: CompactSettings = CompactSettings()
 
 
 # 页面可修改的检查器字段及其校验。
@@ -65,7 +82,15 @@ RANGES = {
     "stats_window": (20, 2000),
     "sample_limit": (5, 200),
     "diff_char_limit": (5000, 500000),
+    "digest_max_chars": (150, 3000),
+    "wait_seconds": (0, 20),
+    "min_chars": (200, 50000),
+    "block_min_chars": (200, 100000),
+    "snippet_chars": (40, 1000),
 }
+
+# 页面可直接切换的历史压缩开关。
+EDITABLE_COMPACT = ("enabled", "dry_run", "reminders", "tool_results")
 
 
 def _int(value: Any, key: str, default: int) -> int:
@@ -120,7 +145,24 @@ def load(config: Any) -> Settings:
         memory_traces=_int(raw.get("memory_traces", 200), "memory_traces", 200),
         prices=_prices(raw.get("prices")),
     )
+    rc = cfg.get("compact") or {}
+    if not isinstance(rc, dict):
+        rc = {}
+    compact = CompactSettings(
+        enabled=bool(rc.get("enabled", True)),
+        dry_run=bool(rc.get("dry_run", True)),
+        reminders=bool(rc.get("reminders", True)),
+        tool_results=bool(rc.get("tool_results", True)),
+        distill_provider_id=str(rc.get("distill_provider_id", "") or "").strip(),
+        digest_max_chars=_int(rc.get("digest_max_chars", 500), "digest_max_chars", 500),
+        wait_seconds=_int(rc.get("wait_seconds", 4), "wait_seconds", 4),
+        min_chars=_int(rc.get("min_chars", 600), "min_chars", 600),
+        block_min_chars=_int(rc.get("block_min_chars", 1200), "block_min_chars", 1200),
+        snippet_chars=_int(rc.get("snippet_chars", 150), "snippet_chars", 150),
+        exclude_tools=_patterns(rc.get("exclude_tools")),
+    )
     return Settings(
+        compact=compact,
         enabled=bool(cfg.get("enabled", True)),
         dry_run=bool(cfg.get("dry_run", True)),
         stats_window=_int(cfg.get("stats_window", 200), "stats_window", 200),
@@ -128,6 +170,7 @@ def load(config: Any) -> Settings:
         diff_char_limit=_int(cfg.get("diff_char_limit", 50000), "diff_char_limit", 50000),
         strip_reasoning=bool(cfg.get("strip_reasoning", False)),
         strip_history_images=bool(cfg.get("strip_history_images", False)),
+        minify_json=bool(cfg.get("minify_json", True)),
         inspector=inspector,
     )
 
@@ -166,13 +209,34 @@ def apply_inspector_patch(config: Any, patch: Any) -> list[str]:
     return changed
 
 
+def apply_compact_patch(config: Any, patch: Any) -> list[str]:
+    """页面上的历史压缩开关：启用、试运行、压缩提醒块、压缩工具结果。"""
+
+    if not isinstance(patch, dict):
+        raise ValueError("提交内容必须是对象")
+    current = dict(config.get("compact") or {})
+    changed = []
+    for key, value in patch.items():
+        if key not in EDITABLE_COMPACT:
+            raise ValueError(f"不支持修改的字段：{key}")
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} 必须是布尔值")
+        if current.get(key) != value:
+            current[key] = value
+            changed.append(key)
+    if changed:
+        config["compact"] = current
+        config.save_config()
+    return changed
+
+
 def apply_top_patch(config: Any, patch: Any) -> list[str]:
     """页面上的总开关：启用重排、试运行、清除历史思考、省略历史图片。"""
 
     if not isinstance(patch, dict):
         raise ValueError("提交内容必须是对象")
     changed = []
-    for key in ("enabled", "dry_run", "strip_reasoning", "strip_history_images"):
+    for key in ("enabled", "dry_run", "strip_reasoning", "strip_history_images", "minify_json"):
         if key in patch:
             if not isinstance(patch[key], bool):
                 raise ValueError(f"{key} 必须是布尔值")

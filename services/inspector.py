@@ -231,4 +231,6 @@ def build_record(state: Any) -> dict[str, Any]:
         "after_system": state.after_system,
         "before_tail": state.before_tail,
         "after_tail": state.after_tail,
+        "compact": getattr(state, "compact", None),
+        "rewrite": getattr(state, "rewrite", None),
     }

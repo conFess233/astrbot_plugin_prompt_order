@@ -71,6 +71,12 @@ def arrange(
         target, rank = None, None
         if seg.media:
             target, rank = "tail", _fallback_rank(layout.tail, MEDIA)
+        elif seg.synthetic:
+            # 常驻说明只放在 SYSTEM 区；没排进布局时落在“未排片段”处。
+            target = "system"
+            rank = pattern_rank(seg.key, seg.owner, layout.system)
+            if rank is None:
+                rank = _fallback_rank(layout.system, UNPLACED)
         else:
             for zone in ("system", "tail"):
                 rank = pattern_rank(seg.key, seg.owner, zones[zone], seg.zone, zone)
@@ -96,7 +102,9 @@ def arrange(
         "tail": [s.key for s in new_tail],
     }
 
-    if [id(s) for s in new_system] != [id(s) for s in old_system]:
+    # 常驻说明不在原 system 文本里，有它时必须重建 system。
+    has_notes = any(s.synthetic for s in new_system)
+    if has_notes or [id(s) for s in new_system] != [id(s) for s in old_system]:
         result.system_segments = [s for s in new_system if s.text.strip()]
         result.system = layout.separator.join(s.text.strip() for s in result.system_segments)
         if result.system == original_system:

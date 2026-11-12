@@ -59,6 +59,8 @@ class RequestState:
     arrange_note: str = ""
     layout_id: str = ""
     trace: Any = None
+    compact: dict[str, Any] | None = None
+    rewrite: dict[str, Any] | None = None
 
 
 def part_text(part: Any) -> str:

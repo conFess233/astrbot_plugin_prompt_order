@@ -33,6 +33,8 @@ class Segment:
     order: int
     temp: bool = False
     media: bool = False
+    # 插件自己生成的片段（常驻说明），不来自请求。
+    synthetic: bool = False
     # 原始 part / tool 对象，只在内存中使用，不序列化。
     ref: Any = field(default=None, repr=False)
 
@@ -44,6 +46,7 @@ class Segment:
             "order": self.order,
             "temp": self.temp,
             "media": self.media,
+            "synthetic": self.synthetic,
             "length": len(self.text),
         }
         if with_text:

@@ -11,6 +11,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .services import settings as settings_service
+from .services.history import HistoryService
 from .services.inspector import InspectorService
 from .services.orderer import STATE_KEY, OrderService
 from .services.web_api import WebApi
@@ -23,7 +24,7 @@ ARRANGE_PRIORITY = -99999
 
 
 class PromptOrderPlugin(Star):
-    """按用户布局重排提示词片段，并提供调用检查器。"""
+    """按用户布局重排提示词片段，压缩历史长文本，并提供调用检查器。"""
 
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
@@ -36,21 +37,28 @@ class PromptOrderPlugin(Star):
         )
         self.inspector = InspectorService(data_dir, self.settings, context)
         self.order.inspector = self.inspector
-        self.web = WebApi(context, config, self.order, self.inspector, self._reload_settings)
+        self.history = HistoryService(data_dir, self.settings.compact, context)
+        self.web = WebApi(
+            context, config, self.order, self.inspector, self.history, self._reload_settings
+        )
         self._started = False
 
     async def initialize(self) -> None:
         self.order.start()
         self.inspector.start()
+        self.history.start()
         self.web.register()
         self._started = True
         mode = "试运行" if self.settings.dry_run else "生效中"
         inspector = "开启" if self.settings.inspector.enabled else "关闭"
-        logger.info(f"提示词编排：已启动，重排{mode}，检查器{inspector}")
+        compact = self.settings.compact
+        history = "关闭" if not compact.enabled else ("试运行" if compact.dry_run else "生效中")
+        logger.info(f"提示词编排：已启动，重排{mode}，历史压缩{history}，检查器{inspector}")
 
     def _reload_settings(self) -> None:
         self.settings = settings_service.load(self.config)
         self.order.settings = self.settings
+        self.history.settings = self.settings.compact
         self.inspector.apply_settings(self.settings)
         self.inspector.refresh()
 
@@ -67,10 +75,18 @@ class PromptOrderPlugin(Star):
 
     @filter.on_llm_request(priority=ARRANGE_PRIORITY)
     async def po_arrange(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
-        """按布局重排；任何异常都放弃重排，请求原样发出。"""
+        """压缩历史后按布局重排；任何异常都放弃对应步骤，请求原样发出。"""
 
         if not self._started:
             return
+        state = event.get_extra(STATE_KEY)
+        try:
+            umo = str(getattr(event, "unified_msg_origin", "") or "")
+            record = await self.history.before_request(umo, req)
+            if state is not None and record is not None:
+                state.compact = record
+        except Exception:
+            logger.warning("提示词编排：历史压缩失败，本次历史保持原样", exc_info=True)
         try:
             self.order.arrange(event, req)
         except Exception:
@@ -78,8 +94,14 @@ class PromptOrderPlugin(Star):
 
     @filter.on_agent_done()
     async def po_done(self, event: AstrMessageEvent, run_context, response) -> None:
-        """本轮结束：补全样本里的后续改动，并结束检查器记录。"""
+        """本轮结束：安排工具结果提炼，补全样本里的后续改动，并结束检查器记录。"""
 
+        if self._started:
+            try:
+                umo = str(getattr(event, "unified_msg_origin", "") or "")
+                self.history.after_turn(umo, getattr(run_context, "messages", None) or [])
+            except Exception:
+                logger.warning("提示词编排：安排工具结果提炼失败", exc_info=True)
         state = event.get_extra(STATE_KEY)
         if state is None:
             return
@@ -93,4 +115,5 @@ class PromptOrderPlugin(Star):
         self._started = False
         self.order.stop()
         await self.inspector.stop()
+        await self.history.stop()
         logger.info("提示词编排：已停用，钩子与 provider 包装已还原")

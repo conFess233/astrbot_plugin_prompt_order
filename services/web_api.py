@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -13,13 +14,16 @@ from astrbot.api import logger
 from astrbot.api.web import error_response, json_response, request, stream_response
 
 from ..models.layout import LayoutError
+from .history import HistoryService
 from .inspector import InspectorService
 from .orderer import OrderService
-from .settings import apply_inspector_patch, apply_top_patch
+from .settings import apply_compact_patch, apply_inspector_patch, apply_top_patch
 from .storage import StaleVersionError
 
 PLUGIN_NAME = "astrbot_plugin_prompt_order"
 MAX_LIMIT = 200
+# 摘要按工具结果内容的 SHA-1 存储。
+DIGEST_KEY_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def guarded(fn: Callable) -> Callable:
@@ -54,12 +58,14 @@ class WebApi:
         config: Any,
         order: OrderService,
         inspector: InspectorService,
+        history: HistoryService,
         on_settings_changed: Callable[[], None],
     ) -> None:
         self.context = context
         self.config = config
         self.order = order
         self.inspector = inspector
+        self.history = history
         self._settings_changed = on_settings_changed
         self._save_lock = asyncio.Lock()
 
@@ -83,6 +89,9 @@ class WebApi:
             ("inspector/live", self.live, ["GET"], "实时事件流"),
             ("inspector/export", self.export, ["GET"], "导出调用记录"),
             ("inspector/clear", self.clear, ["POST"], "清空调用记录"),
+            ("compact/overview", self.compact_overview, ["GET"], "历史压缩概览与最近摘要"),
+            ("compact/digest", self.compact_digest, ["GET"], "单条摘要的原文与提炼结果"),
+            ("compact/settings", self.compact_settings, ["POST"], "修改历史压缩开关"),
         )
         for route, handler, methods, desc in routes:
             self.context.register_web_api(f"/{PLUGIN_NAME}/{route}", handler, methods, desc)
@@ -98,6 +107,7 @@ class WebApi:
                 "dry_run": settings.dry_run,
                 "strip_reasoning": settings.strip_reasoning,
                 "strip_history_images": settings.strip_history_images,
+                "minify_json": settings.minify_json,
                 "config": self.order.store.snapshot(),
                 "wrapped_hooks": len(self.order.wrapper._wrapped),
             }
@@ -299,6 +309,54 @@ class WebApi:
         count = max(in_memory, await asyncio.to_thread(self.inspector.store.clear_disk))
         logger.info(f"提示词编排：已清空 {count} 条调用记录，操作者={request.username}")
         return json_response({"cleared": count})
+
+    # ---------- 历史压缩 ----------
+
+    @guarded
+    async def compact_overview(self):
+        days = _int_arg("days", 7, 1, 30)
+        limit = _int_arg("limit", 50, 1, MAX_LIMIT)
+        since = time.time() - days * 86400
+        store = self.history.store
+        overview = await asyncio.to_thread(store.overview, since)
+        recent = await asyncio.to_thread(store.recent, limit)
+        s = self.history.settings
+        overview.update(
+            {
+                "days": days,
+                "recent": recent,
+                "runtime": self.history.status(),
+                "settings": {
+                    "enabled": s.enabled,
+                    "dry_run": s.dry_run,
+                    "reminders": s.reminders,
+                    "tool_results": s.tool_results,
+                    "distill_provider_id": s.distill_provider_id,
+                    "digest_max_chars": s.digest_max_chars,
+                    "wait_seconds": s.wait_seconds,
+                    "min_chars": s.min_chars,
+                    "block_min_chars": s.block_min_chars,
+                },
+            }
+        )
+        return json_response(overview)
+
+    @guarded
+    async def compact_digest(self):
+        key = str(request.query.get("key", "") or "")
+        if not DIGEST_KEY_RE.match(key):
+            raise ValueError("摘要 key 不合法")
+        data = await asyncio.to_thread(self.history.store.detail, key)
+        if data is None:
+            raise LookupError("摘要不存在或已过期")
+        return json_response(data)
+
+    @guarded
+    async def compact_settings(self):
+        changed = apply_compact_patch(self.config, await request.json(default={}))
+        if changed:
+            self._settings_changed()
+        return json_response({"changed": changed})
 
 
 def _today_start() -> float:

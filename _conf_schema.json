@@ -41,6 +41,86 @@
     "description": "省略历史图片",
     "hint": "发送前把已结束轮次里的图片换成文字占位“[图片：历史图片已省略]”，本轮的图片和工具返回的图片保留；保存的对话历史不受影响。支持 OpenAI 兼容与 Gemini 接口。开启后模型看不到旧图，需要时靠识图插件的回看工具。"
   },
+  "minify_json": {
+    "type": "bool",
+    "default": true,
+    "description": "压缩本轮片段里的 JSON",
+    "hint": "发送前把本轮不存档片段里的 JSON（例如 ContextAware 的图片目录）去掉缩进和多余空白，内容不变，中文保持原样；短于 80 字或解析失败的部分不动。线上图片目录是单行 JSON，约可少 5%（每轮约 50 字）；更多的精简需要用排序页的改写规则自行处理。不受“试运行”影响；关闭“启用重排”时不生效。"
+  },
+  "compact": {
+    "type": "object",
+    "description": "历史压缩",
+    "hint": "压缩对话历史里的提醒块和工具结果（联网搜索、知识库等），减少每次请求反复发送的长文本。改写会随本轮一起写回对话历史，每段内容只压缩一次。",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "default": true,
+        "description": "启用历史压缩",
+        "hint": "关闭后不压缩、不提炼。"
+      },
+      "dry_run": {
+        "type": "bool",
+        "default": true,
+        "description": "试运行",
+        "hint": "开启时只计算压缩效果并照常提炼摘要（可在管理页「历史压缩」查看质量），不改写历史。确认无误后关闭。关闭后第一次请求会把已有历史一次压缩完，有一次缓存未命中。"
+      },
+      "reminders": {
+        "type": "bool",
+        "default": true,
+        "description": "压缩历史提醒块",
+        "hint": "把历史消息里的 <system_reminder>（用户 ID、昵称、时间、星期）压成“[昵称(ID) 2026-11-11 14:55]”。本轮消息保持完整。"
+      },
+      "tool_results": {
+        "type": "bool",
+        "default": true,
+        "description": "压缩历史工具结果",
+        "hint": "已结束回合里的长工具结果：有摘要用摘要，没有就按规则截取（搜索保留标题、链接和摘要开头；知识库去掉文档头并去重）。本轮的工具结果保持原样。"
+      },
+      "distill_provider_id": {
+        "type": "string",
+        "default": "",
+        "description": "提炼模型",
+        "hint": "回合结束后用它把本轮的长工具结果提炼成笔记，下一轮替换进历史。建议选便宜快速的模型；留空则只按规则截取。",
+        "_special": "select_provider"
+      },
+      "digest_max_chars": {
+        "type": "int",
+        "default": 500,
+        "description": "摘要长度上限（字）",
+        "hint": "范围 150～3000。"
+      },
+      "wait_seconds": {
+        "type": "int",
+        "default": 4,
+        "description": "等待提炼（秒）",
+        "hint": "下一条消息来得太快、上一轮的提炼还没完成时，最多等这么久；超时就按规则截取，且之后不再替换。0 表示不等。范围 0～20。"
+      },
+      "min_chars": {
+        "type": "int",
+        "default": 600,
+        "description": "单条结果压缩门槛（字）",
+        "hint": "短于此长度的工具结果不处理。范围 200～50000。"
+      },
+      "block_min_chars": {
+        "type": "int",
+        "default": 1200,
+        "description": "单回合压缩门槛（字）",
+        "hint": "一个回合里达到门槛的工具结果合计不到这么长时，整回合不处理。范围 200～100000。"
+      },
+      "snippet_chars": {
+        "type": "int",
+        "default": 150,
+        "description": "规则截取长度（字）",
+        "hint": "没有摘要时，每条搜索结果保留的摘要字数；知识库片段保留两倍。范围 40～1000。"
+      },
+      "exclude_tools": {
+        "type": "text",
+        "default": "",
+        "description": "不压缩的工具",
+        "hint": "每行一个工具名，支持通配符，例如 read_memory_evidence。"
+      }
+    }
+  },
   "inspector": {
     "type": "object",
     "description": "调用检查器",

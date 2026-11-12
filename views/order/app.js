@@ -1,6 +1,7 @@
 // 入口：等待 bridge 就绪，处理悬浮岛导航、悬浮按钮、草稿胶囊与快捷键。
 import * as arrange from "./arrange.js";
 import * as changes from "./changes.js";
+import * as compact from "./compact.js";
 import { $, $$, bridge, closeSheet, errText, iconEl, toast } from "./core.js";
 import { hydrate } from "./icons.js";
 import * as inspector from "./inspector.js";
@@ -26,6 +27,7 @@ async function switchView(name) {
   $$(".view").forEach((v) => v.classList.toggle("on", v.id === `view-${name}`));
   try {
     if (name === "inspector") await inspector.show();
+    if (name === "compact") await compact.show();
     if (name === "changes") await changes.loadChanges();
     if (name === "coverage") await changes.loadCoverage();
   } catch (err) {
@@ -114,6 +116,7 @@ async function refreshAll() {
   try {
     await arrange.load();
     if (view === "inspector") await inspector.refresh();
+    if (view === "compact") await compact.show();
     if (view === "changes") await changes.loadChanges();
     if (view === "coverage") await changes.loadCoverage();
     toast("数据已刷新");
