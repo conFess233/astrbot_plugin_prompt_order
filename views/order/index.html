@@ -48,7 +48,7 @@
 
         <div class="card card-pad layout-bar">
           <label class="field">布局<select id="layout-select" class="input"></select></label>
-          <label class="field grow">会话范围（umo 通配符，逗号分隔；留空为兜底布局）<input id="layout-scope" class="input" type="text" placeholder="例如 清宵:GroupMessage:*" /></label>
+          <label class="field grow">会话范围（umo 通配符，逗号分隔；留空为兜底布局）<input id="layout-scope" class="input" type="text" placeholder="例如 mybot:GroupMessage:*" /></label>
           <label class="field">名称<input id="layout-name" class="input" type="text" maxlength="40" /></label>
           <div class="bar-actions">
             <button class="btn btn-ghost btn-sm" type="button" id="layout-new" data-i="plus">新建</button>
@@ -142,7 +142,11 @@
         </div>
       </section>
 
+<<<<<<< HEAD
       <!-- 历史压缩 -->
+=======
+      <!-- 改动记录 -->
+>>>>>>> 5f29bcb51a7fb3a6b2ab360a88987ccee26b59b6
       <section class="view" id="view-compact" aria-labelledby="h-compact">
         <div class="section-head">
           <h2 id="h-compact">历史压缩</h2>
@@ -153,6 +157,26 @@
             <label class="toggle" title="已结束回合的长工具结果：有摘要用摘要，没有就按规则截取"><span class="switch" id="cp-tools" role="switch" tabindex="0" aria-label="压缩工具结果"></span>压缩工具结果</label>
           </div>
         </div>
+<<<<<<< HEAD
+=======
+        <div class="ruler"></div>
+        <div class="stats-head">
+          <div class="stats-range" id="cp-notes"></div>
+          <label class="field">范围<select id="cp-days" class="input"><option value="1">最近 1 天</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option></select></label>
+        </div>
+        <section class="stats" id="cp-stats"></section>
+        <div class="layout" id="cp-layout">
+          <div class="card">
+            <div class="table-tools"><div><strong>最近提炼</strong><span>回合结束后把长工具结果提炼成笔记，下一轮替换进历史；提炼模型和门槛在插件配置里设置</span></div></div>
+            <div class="table-wrap"><table><thead><tr><th>时间</th><th>问题 / 工具</th><th class="col-opt">字数</th><th class="col-opt">耗时</th><th>结果</th></tr></thead><tbody id="cp-rows"></tbody></table></div>
+          </div>
+          <aside class="side"><div class="card side-card" id="cp-side"></div></aside>
+        </div>
+      </section>
+
+      <section class="view" id="view-changes" aria-labelledby="h-changes">
+        <div class="section-head"><h2 id="h-changes">钩子改动记录</h2></div>
+>>>>>>> 5f29bcb51a7fb3a6b2ab360a88987ccee26b59b6
         <div class="ruler"></div>
         <div class="stats-head">
           <div class="stats-range" id="cp-notes"></div>

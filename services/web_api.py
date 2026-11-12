@@ -18,6 +18,7 @@ from ..models.layout import LayoutError
 from .history import HistoryService
 from .inspector import InspectorService
 from .orderer import OrderService
+<<<<<<< HEAD
 from .settings import (
     ConfigConflictError,
     apply_compact_patch,
@@ -27,6 +28,9 @@ from .settings import (
     config_view,
     load_schema,
 )
+=======
+from .settings import apply_compact_patch, apply_inspector_patch, apply_top_patch
+>>>>>>> 5f29bcb51a7fb3a6b2ab360a88987ccee26b59b6
 from .storage import StaleVersionError
 
 PLUGIN_NAME = "astrbot_plugin_prompt_order"
@@ -103,8 +107,11 @@ class WebApi:
             ("compact/overview", self.compact_overview, ["GET"], "历史压缩概览与最近摘要"),
             ("compact/digest", self.compact_digest, ["GET"], "单条摘要的原文与提炼结果"),
             ("compact/settings", self.compact_settings, ["POST"], "修改历史压缩开关"),
+<<<<<<< HEAD
             ("config", self.config_get, ["GET"], "配置页：字段说明、当前值与可选模型"),
             ("config/save", self.config_save, ["POST"], "配置页：校验并保存修改"),
+=======
+>>>>>>> 5f29bcb51a7fb3a6b2ab360a88987ccee26b59b6
         )
         for route, handler, methods, desc in routes:
             self.context.register_web_api(f"/{PLUGIN_NAME}/{route}", handler, methods, desc)
@@ -371,6 +378,7 @@ class WebApi:
             self._settings_changed()
         return json_response({"changed": changed})
 
+<<<<<<< HEAD
     # ---------- 配置 ----------
 
     def _providers(self) -> list[dict[str, str]]:
@@ -403,6 +411,8 @@ class WebApi:
         data["changed"] = changed
         return json_response(data)
 
+=======
+>>>>>>> 5f29bcb51a7fb3a6b2ab360a88987ccee26b59b6
 
 def _today_start() -> float:
     now = time.localtime()

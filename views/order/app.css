@@ -190,6 +190,7 @@ pre.diff .skip { color: var(--subtle); font-style: italic; }
 .rule-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .check { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 13px; color: var(--text); }
 .form-actions { margin-top: 10px; }
+<<<<<<< HEAD
 
 /* ── 配置页 ─────────────────────────────── */
 .layout[hidden] { display: none; }
@@ -202,3 +203,5 @@ pre.diff .skip { color: var(--subtle); font-style: italic; }
 .cfg-group .seg-input .num { width: 96px; flex: none; }
 .cfg-note { margin-top: 10px; }
 .diff li .cfg-revert { justify-self: start; height: 26px; padding: 0 9px; font-size: 12px; }
+=======
+>>>>>>> 5f29bcb51a7fb3a6b2ab360a88987ccee26b59b6

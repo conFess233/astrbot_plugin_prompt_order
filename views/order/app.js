@@ -2,7 +2,10 @@
 import * as arrange from "./arrange.js";
 import * as changes from "./changes.js";
 import * as compact from "./compact.js";
+<<<<<<< HEAD
 import * as config from "./config.js";
+=======
+>>>>>>> 5f29bcb51a7fb3a6b2ab360a88987ccee26b59b6
 import { $, $$, bridge, closeSheet, errText, iconEl, toast } from "./core.js";
 import { hydrate } from "./icons.js";
 import * as inspector from "./inspector.js";
@@ -29,8 +32,13 @@ async function switchView(name) {
   try {
     if (name === "inspector") await inspector.show();
     if (name === "compact") await compact.show();
+<<<<<<< HEAD
     if (name === "changes") await changes.show();
     if (name === "config") await config.show();
+=======
+    if (name === "changes") await changes.loadChanges();
+    if (name === "coverage") await changes.loadCoverage();
+>>>>>>> 5f29bcb51a7fb3a6b2ab360a88987ccee26b59b6
   } catch (err) {
     toast(`加载失败：${errText(err)}`, "bad");
   }
@@ -159,10 +167,16 @@ async function refreshAll() {
     await arrange.load();
     if (view === "inspector") await inspector.refresh();
     if (view === "compact") await compact.show();
+<<<<<<< HEAD
     if (view === "changes") await changes.show();
     if (view === "config") await config.show();
     const kept = view === "config" && config.dirtyCount();
     toast(kept ? "数据已刷新；配置有未保存的修改，未重新读取" : "数据已刷新");
+=======
+    if (view === "changes") await changes.loadChanges();
+    if (view === "coverage") await changes.loadCoverage();
+    toast("数据已刷新");
+>>>>>>> 5f29bcb51a7fb3a6b2ab360a88987ccee26b59b6
   } catch (err) {
     toast(`刷新失败：${errText(err)}`, "bad");
   }

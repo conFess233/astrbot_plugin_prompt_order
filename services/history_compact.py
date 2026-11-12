@@ -107,7 +107,11 @@ class Block:
 
 
 def _question_of(content: Any) -> str:
+<<<<<<< HEAD
+    """用户原话：去掉插件注入的 <…> 块和图片目录块。"""
+=======
     """用户原话：去掉插件注入的 <…> / [ContextAware …] 等块。"""
+>>>>>>> 5f29bcb51a7fb3a6b2ab360a88987ccee26b59b6
 
     parts: list[str] = []
     if isinstance(content, str):
