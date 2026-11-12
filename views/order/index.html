@@ -25,7 +25,7 @@
           <button type="button" data-view="inspector" data-i="pulse">检查器</button>
           <button type="button" data-view="compact" data-i="list">历史压缩</button>
           <button type="button" data-view="changes" data-i="history">改动记录</button>
-          <button type="button" data-view="coverage" data-i="shield">覆盖范围</button>
+          <button type="button" data-view="config" data-i="settings">配置<span id="badge-config" class="badge" hidden></span></button>
         </nav>
         <div class="title-actions">
           <button id="refresh" class="icon-btn" type="button" aria-label="刷新数据" title="刷新数据" data-i="refresh"></button>
@@ -142,7 +142,7 @@
         </div>
       </section>
 
-      <!-- 改动记录 -->
+      <!-- 历史压缩 -->
       <section class="view" id="view-compact" aria-labelledby="h-compact">
         <div class="section-head">
           <h2 id="h-compact">历史压缩</h2>
@@ -168,25 +168,33 @@
         </div>
       </section>
 
+      <!-- 改动记录（含覆盖范围） -->
       <section class="view" id="view-changes" aria-labelledby="h-changes">
-        <div class="section-head"><h2 id="h-changes">钩子改动记录</h2></div>
+        <div class="section-head"><h2 id="h-changes">钩子改动记录</h2>
+          <div class="segmented" id="chg-mode" role="radiogroup" aria-label="显示内容"><span data-mode="changes" role="radio" tabindex="0" class="on" aria-checked="true">改动记录</span><span data-mode="coverage" role="radio" tabindex="0" aria-checked="false">覆盖范围</span></div>
+        </div>
         <div class="ruler"></div>
-        <div class="layout">
+        <div class="layout" id="chg-pane-changes">
           <div class="card">
             <div class="table-tools"><div><strong>最近请求样本</strong><span>每个样本记录了构建阶段每个钩子做了什么</span></div></div>
             <div class="table-wrap"><table><thead><tr><th>时间</th><th>会话 / 消息</th><th>布局</th><th>结果</th></tr></thead><tbody id="chg-rows"></tbody></table></div>
           </div>
           <aside class="side"><div class="card side-card" id="chg-side"></div></aside>
         </div>
-      </section>
-
-      <!-- 覆盖范围 -->
-      <section class="view" id="view-coverage" aria-labelledby="h-coverage">
-        <div class="section-head"><h2 id="h-coverage">覆盖范围</h2></div>
-        <div class="ruler"></div>
-        <div class="layout">
+        <div class="layout" id="chg-pane-coverage" hidden>
           <div class="card"><div class="table-wrap"><table><thead><tr><th>改动发生在哪里</th><th>识别来源</th><th>参与排序</th></tr></thead><tbody id="cov-rows"></tbody></table></div></div>
           <aside class="side"><div class="card side-card" id="cov-side"></div></aside>
+        </div>
+      </section>
+
+      <!-- 配置 -->
+      <section class="view" id="view-config" aria-labelledby="h-config">
+        <div class="section-head"><h2 id="h-config">插件配置</h2></div>
+        <div class="ruler"></div>
+        <nav class="anchors" id="cfg-anchors" aria-label="配置分组"></nav>
+        <div class="layout">
+          <div id="cfg-groups" class="cfg-groups"></div>
+          <aside class="side"><div class="card side-card" id="cfg-side"></div></aside>
         </div>
       </section>
     </main>

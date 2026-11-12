@@ -1,8 +1,10 @@
-"""读取并校验宿主配置，返回只读快照；页面修改检查器开关时也经由这里保存。"""
+"""读取并校验宿主配置，返回只读快照；管理页的开关与配置页也经由这里保存。"""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 DEPTHS = ("call", "wire")
@@ -226,6 +228,162 @@ def apply_compact_patch(config: Any, patch: Any) -> list[str]:
             changed.append(key)
     if changed:
         config["compact"] = current
+        config.save_config()
+    return changed
+
+
+class ConfigConflictError(Exception):
+    """提交的原值与当前配置不一致：配置已在别处（宿主配置页或其他开关）修改。"""
+
+
+# 配置页不给字段配一个分组时使用的组名。
+TOP_GROUP = "重排与请求修整"
+TEXT_LIMIT = 20000
+STRING_LIMIT = 2000
+
+
+def load_schema(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _fields(schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """把 schema 展开为“点分键 → 字段定义”，只展开一层 object。"""
+
+    result = {}
+    for key, item in schema.items():
+        if item.get("type") == "object":
+            for sub, child in (item.get("items") or {}).items():
+                result[f"{key}.{sub}"] = child
+        else:
+            result[key] = item
+    return result
+
+
+def _get(config: Any, key: str) -> Any:
+    head, _, tail = key.partition(".")
+    if not tail:
+        return config.get(head)
+    group = config.get(head)
+    return group.get(tail) if isinstance(group, dict) else None
+
+
+def config_view(schema: dict[str, Any], config: Any) -> dict[str, Any]:
+    """配置页数据：分组后的字段说明与当前值。当前值缺失时用默认值。"""
+
+    groups = [{"key": "", "title": TOP_GROUP, "hint": "", "fields": []}]
+    values = {}
+    for key, item in schema.items():
+        if item.get("type") == "object":
+            group = {
+                "key": key,
+                "title": item.get("description", key),
+                "hint": item.get("hint", ""),
+                "fields": [],
+            }
+            groups.append(group)
+            children = [(f"{key}.{sub}", c) for sub, c in (item.get("items") or {}).items()]
+        else:
+            group = groups[0]
+            children = [(key, item)]
+        for full, child in children:
+            leaf = full.rpartition(".")[2]
+            field = {
+                "key": full,
+                "type": child.get("type", "string"),
+                "title": child.get("description", leaf),
+                "hint": child.get("hint", ""),
+                "default": child.get("default"),
+            }
+            if child.get("options"):
+                field["options"] = child["options"]
+                field["labels"] = child.get("labels") or child["options"]
+            if child.get("_special"):
+                field["special"] = child["_special"]
+            if leaf in RANGES and field["type"] == "int":
+                field["range"] = list(RANGES[leaf])
+            group["fields"].append(field)
+            value = _get(config, full)
+            values[full] = child.get("default") if value is None else value
+    return {"groups": [g for g in groups if g["fields"]], "values": values}
+
+
+def _check(key: str, item: dict[str, Any], value: Any, providers: set[str] | None) -> Any:
+    kind = item.get("type", "string")
+    name = item.get("description", key)
+    if kind == "bool":
+        if not isinstance(value, bool):
+            raise ValueError(f"{name}：必须是开或关")
+        return value
+    if kind == "int":
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name}：必须是整数")
+        leaf = key.rpartition(".")[2]
+        if leaf in RANGES:
+            low, high = RANGES[leaf]
+            if not low <= value <= high:
+                raise ValueError(f"{name}：超出范围 {low}～{high}")
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"{name}：必须是文本")
+    limit = TEXT_LIMIT if kind == "text" else STRING_LIMIT
+    if len(value) > limit:
+        raise ValueError(f"{name}：不超过 {limit} 字")
+    if item.get("options") and value not in item["options"]:
+        raise ValueError(f"{name}：不是可选值")
+    special = item.get("_special") == "select_provider"
+    if special and value and providers is not None and value not in providers:
+        raise ValueError(f"{name}：找不到模型提供商 {value}")
+    return value
+
+
+def apply_config_patch(
+    config: Any,
+    schema: dict[str, Any],
+    patch: Any,
+    base: Any,
+    providers: set[str] | None = None,
+) -> list[str]:
+    """配置页保存：按 schema 校验全部字段，原值一致才写入，一次保存。
+
+    patch 与 base 都是“点分键 → 值”；base 是页面载入时的值，用来发现别处的修改。
+    任何一项不合法或冲突都不写入。
+    """
+
+    if not isinstance(patch, dict) or not isinstance(base, dict):
+        raise ValueError("提交内容必须是对象")
+    fields = _fields(schema)
+    checked = {}
+    for key, value in patch.items():
+        item = fields.get(key)
+        if item is None:
+            raise ValueError(f"不支持修改的字段：{key}")
+        checked[key] = _check(key, item, value, providers)
+    conflicts = []
+    for key in checked:
+        current = _get(config, key)
+        if current is None:
+            current = fields[key].get("default")
+        if key not in base or base[key] != current:
+            conflicts.append(fields[key].get("description", key))
+    if conflicts:
+        names = "、".join(conflicts)
+        raise ConfigConflictError(f"这些配置已在别处修改：{names}。请放弃修改后重新填写")
+    changed = []
+    groups: dict[str, dict[str, Any]] = {}
+    for key, value in checked.items():
+        if _get(config, key) == value:
+            continue
+        head, _, tail = key.partition(".")
+        if tail:
+            if head not in groups:
+                groups[head] = dict(config.get(head) or {})
+            groups[head][tail] = value
+        else:
+            config[head] = value
+        changed.append(key)
+    for head, group in groups.items():
+        config[head] = group
+    if changed:
         config.save_config()
     return changed
 

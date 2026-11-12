@@ -8,6 +8,7 @@ import json
 import re
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
@@ -17,10 +18,19 @@ from ..models.layout import LayoutError
 from .history import HistoryService
 from .inspector import InspectorService
 from .orderer import OrderService
-from .settings import apply_compact_patch, apply_inspector_patch, apply_top_patch
+from .settings import (
+    ConfigConflictError,
+    apply_compact_patch,
+    apply_config_patch,
+    apply_inspector_patch,
+    apply_top_patch,
+    config_view,
+    load_schema,
+)
 from .storage import StaleVersionError
 
 PLUGIN_NAME = "astrbot_plugin_prompt_order"
+SCHEMA_PATH = Path(__file__).resolve().parent.parent / "_conf_schema.json"
 MAX_LIMIT = 200
 # 摘要按工具结果内容的 SHA-1 存储。
 DIGEST_KEY_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -35,7 +45,7 @@ def guarded(fn: Callable) -> Callable:
             return await fn(*args, **kwargs)
         except (LayoutError, ValueError) as exc:
             return error_response(str(exc), status_code=400)
-        except StaleVersionError as exc:
+        except (StaleVersionError, ConfigConflictError) as exc:
             return error_response(str(exc), status_code=409)
         except LookupError as exc:
             return error_response(str(exc), status_code=404)
@@ -68,6 +78,7 @@ class WebApi:
         self.history = history
         self._settings_changed = on_settings_changed
         self._save_lock = asyncio.Lock()
+        self.schema = load_schema(SCHEMA_PATH)
 
     def register(self) -> None:
         routes = (
@@ -92,6 +103,8 @@ class WebApi:
             ("compact/overview", self.compact_overview, ["GET"], "历史压缩概览与最近摘要"),
             ("compact/digest", self.compact_digest, ["GET"], "单条摘要的原文与提炼结果"),
             ("compact/settings", self.compact_settings, ["POST"], "修改历史压缩开关"),
+            ("config", self.config_get, ["GET"], "配置页：字段说明、当前值与可选模型"),
+            ("config/save", self.config_save, ["POST"], "配置页：校验并保存修改"),
         )
         for route, handler, methods, desc in routes:
             self.context.register_web_api(f"/{PLUGIN_NAME}/{route}", handler, methods, desc)
@@ -357,6 +370,38 @@ class WebApi:
         if changed:
             self._settings_changed()
         return json_response({"changed": changed})
+
+    # ---------- 配置 ----------
+
+    def _providers(self) -> list[dict[str, str]]:
+        result = []
+        for provider in self.context.get_all_providers():
+            meta = provider.meta()
+            result.append({"id": meta.id, "model": meta.model or ""})
+        return result
+
+    @guarded
+    async def config_get(self):
+        data = config_view(self.schema, self.config)
+        data["providers"] = self._providers()
+        return json_response(data)
+
+    @guarded
+    async def config_save(self):
+        body = await request.json(default={})
+        providers = {p["id"] for p in self._providers()}
+        async with self._save_lock:
+            changed = apply_config_patch(
+                self.config, self.schema, body.get("values"), body.get("base"), providers
+            )
+        if changed:
+            self._settings_changed()
+            logger.info(
+                f"提示词编排：配置已保存，字段={','.join(changed)}，操作者={request.username}"
+            )
+        data = config_view(self.schema, self.config)
+        data["changed"] = changed
+        return json_response(data)
 
 
 def _today_start() -> float:
