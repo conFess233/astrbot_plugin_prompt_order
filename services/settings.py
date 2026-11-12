@@ -232,7 +232,6 @@ def apply_compact_patch(config: Any, patch: Any) -> list[str]:
     return changed
 
 
-<<<<<<< HEAD
 class ConfigConflictError(Exception):
     """提交的原值与当前配置不一致：配置已在别处（宿主配置页或其他开关）修改。"""
 
@@ -389,8 +388,6 @@ def apply_config_patch(
     return changed
 
 
-=======
->>>>>>> 5f29bcb51a7fb3a6b2ab360a88987ccee26b59b6
 def apply_top_patch(config: Any, patch: Any) -> list[str]:
     """页面上的总开关：启用重排、试运行、清除历史思考、省略历史图片。"""
 
