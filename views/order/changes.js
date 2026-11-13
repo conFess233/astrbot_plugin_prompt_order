@@ -1,10 +1,42 @@
-// 改动记录页与覆盖范围页。
+// 改动记录页：钩子改动记录与覆盖范围两种显示，用分段切换。
 import { $, $$, apiGet, chip, errText, h, iconEl, ownerColor, time, toast } from "./core.js";
 
 let samples = [];
 let selected = "";
+let mode = "changes";
+let wired = false;
 
-export async function loadChanges() {
+function wire() {
+  if (wired) return;
+  wired = true;
+  $$("#chg-mode span").forEach((span) => {
+    const pick = () => {
+      if (span.dataset.mode === mode) return;
+      mode = span.dataset.mode;
+      show().catch((err) => toast(`加载失败：${errText(err)}`, "bad"));
+    };
+    span.addEventListener("click", pick);
+    span.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
+    });
+  });
+}
+
+export async function show() {
+  wire();
+  $$("#chg-mode span").forEach((span) => {
+    const on = span.dataset.mode === mode;
+    span.classList.toggle("on", on);
+    span.setAttribute("aria-checked", on ? "true" : "false");
+  });
+  $("#chg-pane-changes").hidden = mode !== "changes";
+  $("#chg-pane-coverage").hidden = mode !== "coverage";
+  $("#h-changes").textContent = mode === "changes" ? "钩子改动记录" : "覆盖范围";
+  if (mode === "changes") await loadChanges();
+  else await loadCoverage();
+}
+
+async function loadChanges() {
   try {
     samples = (await apiGet("samples", { limit: 100 })).items || [];
   } catch (err) {
@@ -87,7 +119,7 @@ const COVERAGE = [
   ["旁路调用（插件自己调用模型）", "检查器可记录（需打开开关）", "不参与排序"],
 ];
 
-export async function loadCoverage() {
+async function loadCoverage() {
   $("#cov-rows").replaceChildren(...COVERAGE.map(([a, b, c]) => h("tr", {}, [h("td", { text: a }), h("td", { text: b }), h("td", { text: c })])));
   const side = $("#cov-side");
   try {

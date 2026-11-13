@@ -8,10 +8,16 @@ from typing import Any
 
 UNPLACED = "@unplaced"
 MEDIA = "@media"
+NOTE_PREFIX = "@note:"
 TOOL_MODES = ("keep", "by_name", "custom")
 LAYOUT_ID_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
+NOTE_ID_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
 MAX_ENTRIES = 200
 MAX_TEXT = 200
+MAX_NOTES = 20
+MAX_NOTE_TEXT = 4000
+MAX_REWRITES = 50
+MAX_REWRITE_TEXT = 2000
 
 
 class LayoutError(ValueError):
@@ -31,6 +37,41 @@ class SplitRule:
 
 
 @dataclass(slots=True)
+class Note:
+    """用户写的常驻说明，作为一个片段放进 SYSTEM 区。"""
+
+    id: str
+    text: str
+
+    @property
+    def key(self) -> str:
+        return NOTE_PREFIX + self.id
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "text": self.text}
+
+
+@dataclass(slots=True)
+class Rewrite:
+    """对 TAIL 区片段的文字替换；target 为片段 key，或 来源/* 这样的通配符。"""
+
+    target: str
+    find: str
+    replace: str = ""
+    regex: bool = False
+    enabled: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "target": self.target,
+            "find": self.find,
+            "replace": self.replace,
+            "regex": self.regex,
+            "enabled": self.enabled,
+        }
+
+
+@dataclass(slots=True)
 class Layout:
     """一组会话共用的片段顺序。"""
 
@@ -45,6 +86,8 @@ class Layout:
     split_rules: list[SplitRule] = field(default_factory=list)
     separator: str = "\n\n"
     enabled: bool = True
+    notes: list[Note] = field(default_factory=list)
+    rewrites: list[Rewrite] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +101,8 @@ class Layout:
             "split_rules": [rule.to_dict() for rule in self.split_rules],
             "separator": self.separator,
             "enabled": self.enabled,
+            "notes": [note.to_dict() for note in self.notes],
+            "rewrites": [rule.to_dict() for rule in self.rewrites],
         }
 
     @classmethod
@@ -112,7 +157,58 @@ class Layout:
             split_rules=rules,
             separator=separator,
             enabled=bool(data.get("enabled", True)),
+            notes=_notes(data.get("notes")),
+            rewrites=_rewrites(data.get("rewrites")),
         )
+
+
+def _notes(value: Any) -> list[Note]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_NOTES:
+        raise LayoutError(f"常驻说明必须是不超过 {MAX_NOTES} 项的列表")
+    notes: list[Note] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise LayoutError("常驻说明必须是对象")
+        note_id = str(item.get("id", "")).strip()
+        if not NOTE_ID_RE.match(note_id):
+            raise LayoutError(f"常驻说明 ID 不合法：{note_id or '（空）'}")
+        if any(n.id == note_id for n in notes):
+            raise LayoutError(f"常驻说明 ID 重复：{note_id}")
+        text = str(item.get("text", "") or "")
+        if not text.strip() or len(text) > MAX_NOTE_TEXT:
+            raise LayoutError(f"常驻说明 {note_id} 不能为空且不超过 {MAX_NOTE_TEXT} 字")
+        notes.append(Note(note_id, text))
+    return notes
+
+
+def _rewrites(value: Any) -> list[Rewrite]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_REWRITES:
+        raise LayoutError(f"改写规则必须是不超过 {MAX_REWRITES} 项的列表")
+    rules: list[Rewrite] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise LayoutError("改写规则必须是对象")
+        target = _text(item.get("target"), "改写规则的目标片段")
+        if not target:
+            raise LayoutError("改写规则必须指定目标片段")
+        find = str(item.get("find", "") or "")
+        replace = str(item.get("replace", "") or "")
+        if not find or len(find) > MAX_REWRITE_TEXT or len(replace) > MAX_REWRITE_TEXT:
+            raise LayoutError(
+                f"改写规则的查找内容不能为空，查找与替换都不超过 {MAX_REWRITE_TEXT} 字"
+            )
+        regex = bool(item.get("regex", False))
+        if regex:
+            try:
+                re.compile(find)
+            except re.error as exc:
+                raise LayoutError(f"改写规则的正则表达式有误：{exc}") from exc
+        rules.append(Rewrite(target, find, replace, regex, bool(item.get("enabled", True))))
+    return rules
 
 
 def _text(value: Any, label: str) -> str:

@@ -24,6 +24,19 @@ const SPECIAL = {
   "@unplaced": ["未排片段", "没写进布局的片段落在这里，保持原区和原相对顺序"],
   "@media": ["图片 / 音频", "非文本块只能留在 TAIL 区"],
 };
+const NOTE = "@note:";
+const isNote = (key) => String(key).startsWith(NOTE);
+const noteOf = (key) => (layout().notes || []).find((n) => NOTE + n.id === key) || null;
+const firstLine = (text, n = 28) => {
+  const line = String(text || "").trim().split("\n")[0];
+  return line.length > n ? `${line.slice(0, n)}…` : line;
+};
+// 旧版保存的布局没有这两个字段，补齐后草稿与已保存版本才能正确比较。
+function normalize(l) {
+  if (!Array.isArray(l.notes)) l.notes = [];
+  if (!Array.isArray(l.rewrites)) l.rewrites = [];
+  return l;
+}
 let onDirty = () => {};
 
 export function setDirtyListener(fn) {
@@ -38,10 +51,12 @@ const statOf = (key) => segStats()[key] || segStats()[String(key).split("#")[0]]
 export async function load() {
   const data = await apiGet("state");
   S.saved = data.config;
+  S.saved.layouts.forEach(normalize);
   S.enabled = data.enabled;
   S.dryRun = data.dry_run;
   S.strip = Boolean(data.strip_reasoning);
   S.images = Boolean(data.strip_history_images);
+  S.json = data.minify_json !== false;
   S.wrapped = data.wrapped_hooks;
   // 首次载入，或没有未保存修改时，用已保存配置重建草稿；有草稿时保留。
   if (!S.draft.length || !dirtyCount()) S.draft = clone(S.saved.layouts);
@@ -100,6 +115,7 @@ export async function save(button) {
   try {
     const res = await apiPost("save", { layouts: S.draft, base_version: S.saved.version });
     S.saved = res.config;
+    S.saved.layouts.forEach(normalize);
     S.draft = clone(S.saved.layouts);
     changed({ report: false });
     return `布局已保存为 v${res.version}${S.dryRun ? "（当前为试运行，不会改写请求）" : "，立即生效"}`;
@@ -119,6 +135,7 @@ export function discard() {
 // ---------- 约束 ----------
 function denyReason(key, zone) {
   if (key.startsWith("tool:")) return zone === "tools" ? "" : "C3：工具只能在 TOOLS 区里排序";
+  if (isNote(key)) return zone === "system" ? "" : "常驻说明只能放在 SYSTEM 区";
   if (zone === "tools") return "C3：TOOLS 区只放工具";
   if (key === "@media") return zone === "tail" ? "" : "C2：图片和音频只能留在 TAIL 区";
   const st = statOf(key);
@@ -188,6 +205,7 @@ function renderBar() {
   setSwitch($("#sw-dry"), S.dryRun);
   setSwitch($("#sw-strip"), S.strip);
   setSwitch($("#sw-images"), S.images);
+  setSwitch($("#sw-json"), S.json);
 }
 
 function setSwitch(el, on) {
@@ -196,6 +214,10 @@ function setSwitch(el, on) {
 
 function metaChips(key, st) {
   if (SPECIAL[key]) return [chip(SPECIAL[key][1])];
+  if (isNote(key)) {
+    const note = noteOf(key);
+    return note ? [chip("常驻说明", "info"), chip(`${note.text.length} 字`)] : [chip("说明已删除", "warn")];
+  }
   if (key.endsWith("/*")) return [chip("整组", "info"), chip(`来源 ${key.slice(0, -2)}`)];
   if (!st) return [chip("最近未出现", "warn")];
   const [label, kind] = LEVEL[st.level] || ["—", "plain"];
@@ -208,8 +230,11 @@ function metaChips(key, st) {
 function segCard(key, zone, index) {
   const st = statOf(key);
   const special = SPECIAL[key];
-  const owner = key.endsWith("/*") ? key.slice(0, -2) : st ? st.owner : key.split("/")[0];
-  const title = special ? special[0] : key;
+  let owner = st ? st.owner : key.split("/")[0];
+  if (key.endsWith("/*")) owner = key.slice(0, -2);
+  if (isNote(key)) owner = "prompt_order";
+  let title = special ? special[0] : key;
+  if (isNote(key)) title = `常驻说明 · ${firstLine(noteOf(key)?.text) || key.slice(NOTE.length)}`;
   const card = h("li", {
     class: `seg-card${special ? " ph" : ""}${S.selected === key ? " sel" : ""}`,
     draggable: "true",
@@ -272,7 +297,8 @@ function cardActions(key, zone, index) {
     mini("down", "下移", () => move(key, zone, index + 1)),
     mini(zone === "system" ? "down" : "up", `移到 ${other.toUpperCase()} 区`, () => { placeEntry(key, other); changed(); }, denyReason(key, other) || (SPECIAL[key] ? "占位项只能在本区移动" : "")),
   ];
-  if (!SPECIAL[key]) acts.push(mini("x", "移出布局", () => { removeEntry(key); if (S.selected === key) S.selected = ""; changed(); }));
+  if (isNote(key)) acts.push(mini("trash", "删除常驻说明", () => deleteNote(key)));
+  else if (!SPECIAL[key]) acts.push(mini("x", "移出布局", () => { removeEntry(key); if (S.selected === key) S.selected = ""; changed(); }));
   return acts;
 }
 
@@ -332,7 +358,7 @@ function renderLibrary() {
   const box = $("#library");
   const groups = new Map();
   for (const st of Object.values(segStats())) {
-    if (st.zone === "tools" || st.media) continue;
+    if (st.zone === "tools" || st.media || isNote(st.key)) continue;
     if (placedZone(st.key, st)) continue;
     if (!groups.has(st.owner)) groups.set(st.owner, []);
     groups.get(st.owner).push(st);
@@ -380,7 +406,7 @@ function overviewNodes() {
   nodes.push(h("div", { class: "section" }, [h("h4", { text: `警告（${warnings.length}）` }),
     warnings.length ? h("ul", { class: "warn-list" }, warnings.map((w) => h("li", { class: w.level }, [iconEl(w.level === "tip" ? "sparkle" : "info"), h("span", { text: w.text })])))
       : h("p", { class: "empty", text: "没有发现会破坏缓存的排法。" })]));
-  nodes.push(previewSection());
+  nodes.push(previewSection(), rulesOverview());
   return nodes;
 }
 
@@ -426,7 +452,10 @@ function previewBody(full) {
   const side = S.previewMode === "before" || full === "before" ? p.before : p.after;
   out.push(h("div", { class: "field", text: `SYSTEM（${side.system.length} 段）` }), orderList(side.system));
   out.push(h("div", { class: "field", text: `TAIL（${side.tail.length} 段）` }), orderList(side.tail));
-  if (full) out.push(h("div", { class: "field", text: "SYSTEM 全文" }), h("pre", { class: "code", text: side.system_text || "" }));
+  if (full) {
+    out.push(h("div", { class: "field", text: "SYSTEM 全文" }), h("pre", { class: "code", text: side.system_text || "" }));
+    if (side.tail_text) out.push(h("div", { class: "field", text: "TAIL 全文" }), h("pre", { class: "code", text: side.tail_text.join("\n\n") }));
+  }
   return out;
 }
 
@@ -455,6 +484,7 @@ function detailNodes(key) {
     h("button", { type: "button", class: "icon-btn", "aria-label": "返回概览", title: "返回概览", onclick: () => { S.selected = ""; renderAll(); } }, [iconEl("x")])]);
   const nodes = [head];
   if (SPECIAL[key]) return [...nodes, h("p", { class: "empty", text: SPECIAL[key][1] })];
+  if (isNote(key)) return [...nodes, ...noteDetail(key)];
   if (key.endsWith("/*")) return [...nodes, h("p", { class: "empty", text: `来源 ${key.slice(0, -2)} 在本区的所有片段按原相对顺序放在这里；之后它新出现的片段也会排在这里。跨区移动需要单独放置具体片段。` })];
   nodes.push(h("dl", { class: "kv" }, [
     h("dt", { text: "来源" }), h("dd", { text: st ? st.owner : "—" }),
@@ -464,8 +494,259 @@ function detailNodes(key) {
     h("dt", { text: "平均长度" }), h("dd", { text: st ? `${st.avg_len} 字` : "—" }),
   ]));
   if (seg) nodes.push(h("div", { class: "section" }, [h("h4", { text: "样本原文" }), h("pre", { class: "code", text: seg.text })]));
+  if (st && st.zone === "tail" && !st.media) nodes.push(rewriteSection(key, st));
   nodes.push(splitSection(st), aliasSection(key));
   return nodes;
+}
+
+// ---------- 常驻说明 ----------
+function createNote(text = "") {
+  const cur = layout();
+  let n = cur.notes.length + 1;
+  while (cur.notes.some((x) => x.id === `n${n}`)) n += 1;
+  const id = `n${n}`;
+  cur.notes.push({ id, text });
+  placeEntry(NOTE + id, "system");
+  return NOTE + id;
+}
+
+// 输入为空时：边框变红并轻晃，同时在旁边写明原因。
+function flagEmpty(input, msg, text) {
+  input.classList.remove("err");
+  void input.offsetWidth;
+  input.classList.add("err");
+  msg.textContent = text;
+}
+
+function openNoteForm() {
+  const area = h("textarea", {
+    class: "input",
+    rows: "8",
+    maxlength: "4000",
+    placeholder: "写一段每轮都一样的说明，例如：若用户消息中出现 <RAG-Faiss-Memory>，其中是过去的记录，与当前对话冲突时以当前为准。",
+  });
+  const err = h("p", { class: "zone-msg" });
+  const ok = btn("加入 SYSTEM 区", {
+    cls: "btn btn-primary",
+    onClick: () => {
+      if (!area.value.trim()) {
+        flagEmpty(area, err, "说明不能为空。");
+        return;
+      }
+      S.selected = createNote(area.value);
+      closeSheet();
+      changed();
+      toast("已添加常驻说明（草稿），保存后生效");
+    },
+  });
+  openSheet("新建常驻说明", [h("div", { class: "confirm" }, [
+    h("p", {
+      class: "empty",
+      text: "常驻说明会作为一个片段放进 SYSTEM 区（会被缓存），可以拖动调整位置。它不会自动删除本轮片段里的同类内容；需要的话，在 TAIL 区片段的详情里添加改写规则。",
+    }),
+    h("label", { class: "field" }, ["说明内容", area]),
+    err,
+    h("div", { class: "row" }, [btn("取消", { cls: "btn btn-ghost", onClick: closeSheet }), ok]),
+  ])], { single: true });
+  area.focus();
+}
+
+// 删除只改草稿；通知里可以撤销，撤销后恢复原位置。
+function deleteNote(key) {
+  const cur = layout();
+  const index = cur.notes.findIndex((n) => NOTE + n.id === key);
+  if (index < 0) return;
+  const [note] = cur.notes.splice(index, 1);
+  const at = cur.system.indexOf(key);
+  removeEntry(key);
+  if (S.selected === key) S.selected = "";
+  changed();
+  toast("已删除常驻说明（草稿）", "ok", "撤销", () => {
+    cur.notes.splice(index, 0, note);
+    if (at >= 0) cur.system.splice(Math.min(at, cur.system.length), 0, key);
+    changed();
+  });
+}
+
+function noteDetail(key) {
+  const note = noteOf(key);
+  if (!note) return [h("p", { class: "empty", text: "这条常驻说明已被删除。" })];
+  const area = h("textarea", { class: "input", rows: "10", maxlength: "4000", "aria-label": "说明内容" });
+  const err = h("p", { class: "zone-msg" });
+  area.value = note.text;
+  area.addEventListener("change", () => {
+    if (!area.value.trim()) {
+      flagEmpty(area, err, "说明不能为空，已恢复原文。");
+      area.value = note.text;
+      return;
+    }
+    note.text = area.value;
+    changed();
+  });
+  return [
+    h("p", {
+      class: "empty",
+      text: "这段文字每轮都会原样放进 SYSTEM 区，按布局里的位置排列。修改后作为草稿，保存布局后生效。",
+    }),
+    h("dl", { class: "kv" }, [
+      h("dt", { text: "ID" }), h("dd", { class: "mono", text: note.id }),
+      h("dt", { text: "长度" }), h("dd", { text: `${note.text.length} 字` }),
+    ]),
+    h("div", { class: "section" }, [h("h4", { text: "内容" }), area, err]),
+    h("div", { class: "section" }, [
+      btn("删除这条说明", { cls: "btn btn-danger btn-sm", iconName: "trash", onClick: () => deleteNote(key) }),
+    ]),
+  ];
+}
+
+// ---------- 改写规则 ----------
+function ruleTargets(key, st) {
+  return [key.split("#")[0], `${st.owner}/*`];
+}
+
+function ruleHits(index) {
+  const rules = (S.preview && S.preview.rewrite && S.preview.rewrite.rules) || [];
+  return rules.find((r) => r.index === index) || null;
+}
+
+function afterText(key) {
+  const p = S.preview;
+  if (!p) return null;
+  const i = p.after.tail.indexOf(key);
+  return i >= 0 ? p.after.tail_text[i] : null;
+}
+
+function deleteRule(rule) {
+  const cur = layout();
+  const index = cur.rewrites.indexOf(rule);
+  if (index < 0) return;
+  cur.rewrites.splice(index, 1);
+  changed();
+  toast("已删除改写规则（草稿）", "ok", "撤销", () => {
+    cur.rewrites.splice(Math.min(index, cur.rewrites.length), 0, rule);
+    changed();
+  });
+}
+
+function ruleItem(rule) {
+  const hit = ruleHits(layout().rewrites.indexOf(rule));
+  const enabled = h("input", { type: "checkbox", "aria-label": "启用这条规则" });
+  enabled.checked = rule.enabled !== false;
+  enabled.addEventListener("change", () => {
+    rule.enabled = enabled.checked;
+    changed();
+  });
+  const cut = (t) => (t.length > 60 ? `${t.slice(0, 60)}…` : t);
+  let hitChip = null;
+  if (S.preview) {
+    hitChip = hit
+      ? chip(`本样本命中 ${hit.hits} 处，少 ${hit.saved} 字`, "ok")
+      : chip("本样本未命中", "warn");
+  }
+  return h("li", {}, [
+    enabled,
+    h("div", { class: "rule-body" }, [
+      h("div", { class: "rule-find", text: cut(rule.find) }),
+      h("div", { class: "rule-replace", text: `→ ${rule.replace ? cut(rule.replace) : "（删除）"}` }),
+      h("div", { class: "rule-meta" }, [
+        chip(rule.target.endsWith("/*") ? `整个来源 ${rule.target.slice(0, -2)}` : "本片段", "plain"),
+        rule.enabled === false ? chip("已停用", "warn") : null,
+        rule.regex ? chip("正则", "info") : null,
+        hitChip,
+      ]),
+    ]),
+    btn("删除规则", { cls: "btn btn-danger btn-sm", onClick: () => deleteRule(rule) }),
+  ]);
+}
+
+function rewriteSection(key, st) {
+  const sec = h("div", { class: "section" }, [
+    h("h4", { text: "改写规则" }),
+    h("p", {
+      class: "empty",
+      text: "发送前对这个片段做文字替换，按顺序执行，之后再做 JSON 压缩。替换为空即删除。规则只在重排生效（非试运行）时作用于请求；预览随时可用。",
+    }),
+  ]);
+  const targets = ruleTargets(key, st);
+  const rules = layout().rewrites.filter((r) => targets.includes(r.target));
+  if (rules.length) sec.append(h("ul", { class: "dialog-list rule-list" }, rules.map(ruleItem)));
+
+  const find = h("textarea", {
+    class: "input",
+    rows: "3",
+    maxlength: "2000",
+    placeholder: "查找的文字（可以从上方样本原文复制）",
+  });
+  const replace = h("input", { class: "input", maxlength: "2000", placeholder: "替换为（留空表示删除）" });
+  const regex = h("input", { type: "checkbox" });
+  const asNote = h("input", { type: "checkbox" });
+  const scope = h("select", { class: "input" }, [
+    h("option", { value: targets[0], text: "只作用于这个片段" }),
+    h("option", { value: targets[1], text: `作用于来源 ${st.owner} 的全部 TAIL 片段` }),
+  ]);
+  const err = h("p", { class: "zone-msg" });
+  const add = btn("添加改写规则", {
+    cls: "btn btn-tonal btn-sm",
+    iconName: "plus",
+    onClick: () => {
+      if (!find.value) {
+        flagEmpty(find, err, "请填写要查找的文字。");
+        return;
+      }
+      if (regex.checked) {
+        try {
+          new RegExp(find.value);
+        } catch (e) {
+          flagEmpty(find, err, `正则表达式有误：${e.message}`);
+          return;
+        }
+      }
+      layout().rewrites.push({
+        target: scope.value,
+        find: find.value,
+        replace: replace.value,
+        regex: regex.checked,
+        enabled: true,
+      });
+      const withNote = asNote.checked && !regex.checked;
+      if (withNote) createNote(find.value);
+      changed();
+      toast(withNote ? "已添加改写规则，并把查找内容加为常驻说明（草稿）" : "已添加改写规则（草稿），预览已更新");
+    },
+  });
+  sec.append(
+    h("label", { class: "field" }, ["查找", find]),
+    err,
+    h("label", { class: "field" }, ["替换为", replace]),
+    h("label", { class: "field" }, ["范围", scope]),
+    h("label", { class: "check" }, [regex, "按正则表达式匹配（Python 语法，替换里可用 \\1 引用分组）"]),
+    h("label", { class: "check" }, [asNote, "同时把查找的文字加为 SYSTEM 区常驻说明（之后可编辑措辞）"]),
+    h("div", { class: "form-actions" }, [add]),
+  );
+  const after = afterText(key);
+  if (after !== null) {
+    sec.append(h("h4", { text: "改写后（本样本）" }), h("pre", { class: "code", text: after }));
+  }
+  return sec;
+}
+
+function rulesOverview() {
+  const all = layout().rewrites;
+  const rw = S.preview && S.preview.rewrite;
+  const sec = h("div", { class: "section" }, [h("h4", { text: `改写规则（${all.length}）` })]);
+  if (rw) {
+    const bits = [];
+    if (rw.json_blocks) bits.push(`JSON 压缩少 ${rw.json_saved} 字`);
+    if (rw.rule_saved) bits.push(`改写规则少 ${rw.rule_saved} 字`);
+    const text = bits.length ? `本样本：${bits.join("，")}。` : "本样本没有被改写的内容。";
+    sec.append(h("p", { class: "empty", text }));
+  }
+  if (!all.length) {
+    sec.append(h("p", { class: "empty", text: "还没有改写规则。点开 TAIL 区的片段，在详情里添加。" }));
+    return sec;
+  }
+  sec.append(h("ul", { class: "dialog-list rule-list" }, all.map(ruleItem)));
+  return sec;
 }
 
 function splitSection(st) {
@@ -614,6 +895,7 @@ async function rollback(version, button) {
   try {
     const res = await busy(button, "回滚中", () => apiPost("rollback", { version, base_version: S.saved.version }));
     S.saved = res.config;
+    S.saved.layouts.forEach(normalize);
     S.draft = clone(S.saved.layouts);
     changed();
     toast(`已回滚，当前为 v${res.version}`);
@@ -626,8 +908,14 @@ export async function recommend(button) {
   try {
     const res = await busy(button || $("#layout-recommend"), "生成中", () => apiPost("recommend", { layout: layout() }));
     const cur = layout();
-    cur.system = res.layout.system;
-    cur.tail = res.layout.tail;
+    // 推荐来自统计：去掉已删除的常驻说明，补回还没统计到的说明（放在未排片段之前）。
+    const notes = cur.notes.map((n) => NOTE + n.id);
+    const system = res.layout.system.filter((k) => !isNote(k) || notes.includes(k));
+    const missing = notes.filter((k) => !system.includes(k));
+    const at = system.includes("@unplaced") ? system.indexOf("@unplaced") : system.length;
+    system.splice(at, 0, ...missing);
+    cur.system = system;
+    cur.tail = res.layout.tail.filter((k) => !isNote(k));
     changed();
     toast("已生成推荐排序（草稿），保存后生效");
   } catch (err) {
@@ -642,6 +930,7 @@ async function toggleSetting(key, el) {
     if (key === "enabled") S.enabled = next;
     else if (key === "dry_run") S.dryRun = next;
     else if (key === "strip_reasoning") S.strip = next;
+    else if (key === "minify_json") S.json = next;
     else S.images = next;
     setSwitch(el, next);
     renderSide();
@@ -651,6 +940,7 @@ async function toggleSetting(key, el) {
       dry_run: next ? "已进入试运行" : "已退出试运行，重排结果会写回请求",
       strip_reasoning: next ? "已开启：发给 DeepSeek 的请求会清空历史轮次的思考内容" : "已关闭清除历史思考",
       strip_history_images: next ? "已开启：历史轮次的图片会换成文字占位" : "已关闭省略历史图片",
+      minify_json: next ? "已开启：本轮片段里的 JSON 发送前去掉多余空白" : "已关闭 JSON 压缩",
     };
     toast(messages[key]);
   } catch (err) {
@@ -677,7 +967,7 @@ export function init() {
     changed({ report: false });
   });
   $("#layout-new").addEventListener("click", () => layoutForm("新建布局", { id: "", name: "" }, (id, name) => {
-    S.draft.push({ id, name, umo_globs: [], system: ["@unplaced"], tail: ["@unplaced", "@media"], tools: { mode: "keep", order: [] }, aliases: {}, split_rules: [], separator: "\n\n", enabled: true });
+    S.draft.push({ id, name, umo_globs: [], system: ["@unplaced"], tail: ["@unplaced", "@media"], tools: { mode: "keep", order: [] }, aliases: {}, split_rules: [], separator: "\n\n", enabled: true, notes: [], rewrites: [] });
     S.current = S.draft.length - 1;
     changed();
   }));
@@ -703,7 +993,8 @@ export function init() {
     s.addEventListener("click", pick);
     s.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
   });
-  for (const [id, key] of [["#sw-enabled", "enabled"], ["#sw-dry", "dry_run"], ["#sw-strip", "strip_reasoning"], ["#sw-images", "strip_history_images"]]) {
+  $("#note-new").addEventListener("click", () => openNoteForm());
+  for (const [id, key] of [["#sw-enabled", "enabled"], ["#sw-dry", "dry_run"], ["#sw-strip", "strip_reasoning"], ["#sw-images", "strip_history_images"], ["#sw-json", "minify_json"]]) {
     const el = $(id);
     el.addEventListener("click", () => toggleSetting(key, el));
     el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSetting(key, el); } });

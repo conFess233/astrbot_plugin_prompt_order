@@ -5,21 +5,35 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import re
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.web import error_response, json_response, request, stream_response
 
 from ..models.layout import LayoutError
+from .history import HistoryService
 from .inspector import InspectorService
 from .orderer import OrderService
-from .settings import apply_inspector_patch, apply_top_patch
+from .settings import (
+    ConfigConflictError,
+    apply_compact_patch,
+    apply_config_patch,
+    apply_inspector_patch,
+    apply_top_patch,
+    config_view,
+    load_schema,
+)
 from .storage import StaleVersionError
 
 PLUGIN_NAME = "astrbot_plugin_prompt_order"
+SCHEMA_PATH = Path(__file__).resolve().parent.parent / "_conf_schema.json"
 MAX_LIMIT = 200
+# 摘要按工具结果内容的 SHA-1 存储。
+DIGEST_KEY_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def guarded(fn: Callable) -> Callable:
@@ -31,7 +45,7 @@ def guarded(fn: Callable) -> Callable:
             return await fn(*args, **kwargs)
         except (LayoutError, ValueError) as exc:
             return error_response(str(exc), status_code=400)
-        except StaleVersionError as exc:
+        except (StaleVersionError, ConfigConflictError) as exc:
             return error_response(str(exc), status_code=409)
         except LookupError as exc:
             return error_response(str(exc), status_code=404)
@@ -54,14 +68,17 @@ class WebApi:
         config: Any,
         order: OrderService,
         inspector: InspectorService,
+        history: HistoryService,
         on_settings_changed: Callable[[], None],
     ) -> None:
         self.context = context
         self.config = config
         self.order = order
         self.inspector = inspector
+        self.history = history
         self._settings_changed = on_settings_changed
         self._save_lock = asyncio.Lock()
+        self.schema = load_schema(SCHEMA_PATH)
 
     def register(self) -> None:
         routes = (
@@ -83,6 +100,11 @@ class WebApi:
             ("inspector/live", self.live, ["GET"], "实时事件流"),
             ("inspector/export", self.export, ["GET"], "导出调用记录"),
             ("inspector/clear", self.clear, ["POST"], "清空调用记录"),
+            ("compact/overview", self.compact_overview, ["GET"], "历史压缩概览与最近摘要"),
+            ("compact/digest", self.compact_digest, ["GET"], "单条摘要的原文与提炼结果"),
+            ("compact/settings", self.compact_settings, ["POST"], "修改历史压缩开关"),
+            ("config", self.config_get, ["GET"], "配置页：字段说明、当前值与可选模型"),
+            ("config/save", self.config_save, ["POST"], "配置页：校验并保存修改"),
         )
         for route, handler, methods, desc in routes:
             self.context.register_web_api(f"/{PLUGIN_NAME}/{route}", handler, methods, desc)
@@ -98,6 +120,7 @@ class WebApi:
                 "dry_run": settings.dry_run,
                 "strip_reasoning": settings.strip_reasoning,
                 "strip_history_images": settings.strip_history_images,
+                "minify_json": settings.minify_json,
                 "config": self.order.store.snapshot(),
                 "wrapped_hooks": len(self.order.wrapper._wrapped),
             }
@@ -299,6 +322,86 @@ class WebApi:
         count = max(in_memory, await asyncio.to_thread(self.inspector.store.clear_disk))
         logger.info(f"提示词编排：已清空 {count} 条调用记录，操作者={request.username}")
         return json_response({"cleared": count})
+
+    # ---------- 历史压缩 ----------
+
+    @guarded
+    async def compact_overview(self):
+        days = _int_arg("days", 7, 1, 30)
+        limit = _int_arg("limit", 50, 1, MAX_LIMIT)
+        since = time.time() - days * 86400
+        store = self.history.store
+        overview = await asyncio.to_thread(store.overview, since)
+        recent = await asyncio.to_thread(store.recent, limit)
+        s = self.history.settings
+        overview.update(
+            {
+                "days": days,
+                "recent": recent,
+                "runtime": self.history.status(),
+                "settings": {
+                    "enabled": s.enabled,
+                    "dry_run": s.dry_run,
+                    "reminders": s.reminders,
+                    "tool_results": s.tool_results,
+                    "distill_provider_id": s.distill_provider_id,
+                    "digest_max_chars": s.digest_max_chars,
+                    "wait_seconds": s.wait_seconds,
+                    "min_chars": s.min_chars,
+                    "block_min_chars": s.block_min_chars,
+                },
+            }
+        )
+        return json_response(overview)
+
+    @guarded
+    async def compact_digest(self):
+        key = str(request.query.get("key", "") or "")
+        if not DIGEST_KEY_RE.match(key):
+            raise ValueError("摘要 key 不合法")
+        data = await asyncio.to_thread(self.history.store.detail, key)
+        if data is None:
+            raise LookupError("摘要不存在或已过期")
+        return json_response(data)
+
+    @guarded
+    async def compact_settings(self):
+        changed = apply_compact_patch(self.config, await request.json(default={}))
+        if changed:
+            self._settings_changed()
+        return json_response({"changed": changed})
+
+    # ---------- 配置 ----------
+
+    def _providers(self) -> list[dict[str, str]]:
+        result = []
+        for provider in self.context.get_all_providers():
+            meta = provider.meta()
+            result.append({"id": meta.id, "model": meta.model or ""})
+        return result
+
+    @guarded
+    async def config_get(self):
+        data = config_view(self.schema, self.config)
+        data["providers"] = self._providers()
+        return json_response(data)
+
+    @guarded
+    async def config_save(self):
+        body = await request.json(default={})
+        providers = {p["id"] for p in self._providers()}
+        async with self._save_lock:
+            changed = apply_config_patch(
+                self.config, self.schema, body.get("values"), body.get("base"), providers
+            )
+        if changed:
+            self._settings_changed()
+            logger.info(
+                f"提示词编排：配置已保存，字段={','.join(changed)}，操作者={request.username}"
+            )
+        data = config_view(self.schema, self.config)
+        data["changed"] = changed
+        return json_response(data)
 
 
 def _today_start() -> float:

@@ -17,10 +17,18 @@ from ..models.layout import Layout
 from ..models.segment import HookChange, Run
 from .arranger import arrange, match_layout
 from .hook_wrapper import HookWrapper, owner_of_module
+from .rewriter import RewriteReport, note_segments, rewrite_text
 from .settings import Settings
 from .stats import StatsService, recommend, warnings
 from .storage import LayoutStore
-from .tracker import RawItems, RequestState, Tracker, build_segments, take_snapshot
+from .tracker import (
+    RawItems,
+    RequestState,
+    Tracker,
+    build_segments,
+    part_text,
+    take_snapshot,
+)
 
 STATE_KEY = "_prompt_order_state"
 SAMPLE_FLUSH_SECONDS = 10.0
@@ -117,6 +125,8 @@ class OrderService:
             if layout
             else build_segments(items, Layout(id="default", name="默认"))
         )
+        if layout is not None:
+            segments += note_segments(layout, len(segments))
         state.before_system = req.system_prompt or ""
         # 重排写回后来源表会按新顺序重建，先留一份含行内改动细节的版本给检查器展示。
         state.before_runs = list(state.runs)
@@ -160,6 +170,21 @@ class OrderService:
                 note = "顺序已符合布局，未改动"
             for text in result.violations:
                 state.changes.append(HookChange("prompt_order", "arrange", "tail", text))
+        rules_live = (
+            layout is not None
+            and result is not None
+            and not result.error
+            and not self.settings.dry_run
+        )
+        report = self._rewrite(
+            req,
+            segments,
+            layout.rewrites if rules_live else [],
+            self.settings.minify_json and self.settings.enabled,
+        )
+        if report.changed:
+            state.rewrite = report.to_dict()
+            state.changes.append(HookChange("prompt_order", "rewrite", "tail", report.summary()))
         state.arranged = True
         state.arrange_note = note
         state.after_system = req.system_prompt or ""
@@ -176,6 +201,45 @@ class OrderService:
         if now - self._last_flush >= SAMPLE_FLUSH_SECONDS:
             self._last_flush = now
             self._background(self.stats.flush_samples)
+
+    @staticmethod
+    def _rewrite(req: Any, segments: list, rules: list, minify: bool) -> RewriteReport:
+        """对最终的 TAIL 片段套改写规则与 JSON 压缩；原地改 part，来源追踪不受影响。"""
+
+        report = RewriteReport()
+        if not rules and not minify:
+            return report
+        by_part = {
+            id(s.ref): s
+            for s in segments
+            if s.zone == "tail" and not s.media and not s.synthetic and s.ref is not None
+        }
+        for part in list(req.extra_user_content_parts or []):
+            seg = by_part.get(id(part))
+            if seg is None:
+                continue
+            text = part_text(part)
+            if not text:
+                continue
+            new = rewrite_text(
+                text,
+                key=seg.key,
+                owner=seg.owner,
+                temp=seg.temp,
+                rules=rules,
+                minify=minify,
+                report=report,
+            )
+            if new == text:
+                continue
+            if isinstance(part, dict):
+                part["text"] = new
+            else:
+                try:
+                    part.text = new
+                except Exception:
+                    logger.warning("提示词编排：片段改写失败，保持原文", exc_info=True)
+        return report
 
     def _background(self, fn, *args) -> None:
         task = asyncio.create_task(asyncio.to_thread(fn, *args))
@@ -227,6 +291,7 @@ class OrderService:
             raise LookupError("样本不存在或已被新样本覆盖")
         items = RawItems.from_dict(sample["items"])
         segments = build_segments(items, layout)
+        segments += note_segments(layout, len(segments))
         before_system = "".join(r.text for r in items.runs)
         result = arrange(
             segments,
@@ -240,22 +305,44 @@ class OrderService:
             [s.ref for s in segments if s.zone == "tail"] if result.parts is None else result.parts
         )
         by_key = {s.key: s for s in segments}
+        # 改写规则与 JSON 压缩只作用于来自请求的 TAIL 片段，这里在副本上演示效果。
+        by_part = {
+            id(s.ref): s
+            for s in segments
+            if s.zone == "tail" and not s.media and not s.synthetic and s.ref is not None
+        }
+        report = RewriteReport()
+        tail_text = []
+        for part in tail_parts:
+            text = part.get("text", "") if isinstance(part, dict) else str(part)
+            seg = by_part.get(id(part))
+            if seg is not None:
+                text = rewrite_text(
+                    text,
+                    key=seg.key,
+                    owner=seg.owner,
+                    temp=seg.temp,
+                    rules=layout.rewrites,
+                    minify=self.settings.minify_json,
+                    report=report,
+                )
+            tail_text.append(text)
         return {
             "segments": [s.to_dict() for s in segments],
             "before": {
-                "system": [s.key for s in segments if s.zone == "system"],
+                "system": [s.key for s in segments if s.zone == "system" and not s.synthetic],
                 "tail": [s.key for s in segments if s.zone == "tail"],
                 "system_text": before_system,
+                "tail_text": [s.text for s in segments if s.zone == "tail"],
             },
             "after": {
                 "system": result.plan.get("system", []),
                 "tail": result.plan.get("tail", []),
                 "tools": result.plan.get("tools", []),
                 "system_text": after_system,
-                "tail_text": [
-                    p.get("text", "") if isinstance(p, dict) else str(p) for p in tail_parts
-                ],
+                "tail_text": tail_text,
             },
+            "rewrite": report.to_dict(),
             "changed": result.changed,
             "violations": result.violations,
             "error": result.error,

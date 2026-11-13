@@ -175,3 +175,30 @@ pre.diff .add { background: var(--success-soft); }
 pre.diff .del { background: var(--danger-soft); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--danger) 50%, transparent); }
 pre.diff .skip { color: var(--subtle); font-style: italic; }
 
+
+/* 开关提交中：禁止重复点击 */
+.switch.busy { opacity: .55; pointer-events: none; }
+
+/* 全屏面板左栏 */
+.sheet-col { display: grid; gap: 12px; align-content: start; }
+
+/* 改写规则 */
+.rule-list li { align-items: flex-start; }
+.rule-body { flex: 1; min-width: 0; }
+.rule-find { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.rule-replace { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.rule-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.check { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 13px; color: var(--text); }
+.form-actions { margin-top: 10px; }
+
+/* ── 配置页 ─────────────────────────────── */
+.layout[hidden] { display: none; }
+.section-head .segmented { margin-left: auto; }
+.cfg-groups { display: grid; gap: 14px; min-width: 0; }
+.cfg-group { scroll-margin-top: 16px; }
+.cfg-group .ctl { min-width: 0; }
+.cfg-group textarea.input { width: 100%; min-height: 76px; resize: vertical; font-family: var(--mono); font-size: 12.5px; }
+.cfg-group select.input, .cfg-group input[type="text"].input { width: 100%; max-width: 420px; }
+.cfg-group .seg-input .num { width: 96px; flex: none; }
+.cfg-note { margin-top: 10px; }
+.diff li .cfg-revert { justify-self: start; height: 26px; padding: 0 9px; font-size: 12px; }
