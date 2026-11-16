@@ -91,6 +91,8 @@ class WebApi:
             ("recommend", self.recommend, ["POST"], "生成推荐布局"),
             ("save", self.save, ["POST"], "保存布局为新版本"),
             ("versions", self.versions, ["GET"], "布局历史版本"),
+            ("stats/counts", self.stats_counts, ["GET"], "各布局的统计与样本条数"),
+            ("stats/clear", self.stats_clear, ["POST"], "清除统计与样本"),
             ("rollback", self.rollback, ["POST"], "回滚到历史版本"),
             ("inspector/status", self.inspector_status, ["GET"], "检查器状态"),
             ("inspector/config", self.inspector_config, ["POST"], "修改检查器开关"),
@@ -193,6 +195,31 @@ class WebApi:
             new_version = await asyncio.to_thread(self.order.store.rollback, version, base)
         logger.info(f"提示词编排：已回滚到 v{version}，生成 v{new_version}")
         return json_response({"version": new_version, "config": self.order.store.snapshot()})
+
+    @guarded
+    async def stats_counts(self):
+        return json_response({"layouts": await asyncio.to_thread(self.order.stats.counts)})
+
+    @guarded
+    async def stats_clear(self):
+        body = await request.json(default={})
+        if body.get("confirm") is not True:
+            raise ValueError("清除需要确认")
+        scope = body.get("scope")
+        if scope == "all":
+            layout_id = None
+        elif scope == "layout":
+            layout_id = str(body.get("layout", "") or "")
+            if not layout_id or len(layout_id) > 40:
+                raise ValueError("缺少布局 ID")
+        else:
+            raise ValueError("scope 只能是 layout 或 all")
+        cleared = await asyncio.to_thread(self.order.stats.clear, layout_id)
+        logger.info(
+            f"提示词编排：已清除统计 {cleared['requests']} 条、样本 {cleared['samples']} 个，"
+            f"范围={layout_id or '全部布局'}，操作者={request.username}"
+        )
+        return json_response(cleared)
 
     # ---------- 检查器 ----------
 

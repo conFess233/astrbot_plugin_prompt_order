@@ -904,6 +904,60 @@ async function rollback(version, button) {
   }
 }
 
+// 清除统计与样本：先读各布局条数，确认框写明范围与数量；不可撤销。
+async function openClearStats() {
+  let counts = {};
+  try {
+    counts = (await apiGet("stats/counts")).layouts || {};
+  } catch (err) {
+    toast(`读取记录条数失败：${errText(err)}`, "bad");
+    return;
+  }
+  const cur = layout();
+  const zero = { requests: 0, samples: 0 };
+  const total = Object.values(counts).reduce(
+    (a, c) => ({ requests: a.requests + c.requests, samples: a.samples + c.samples }), { ...zero });
+  const scopes = {
+    layout: { label: `当前布局“${cur.name}”`, n: counts[cur.id] || zero },
+    all: { label: "全部布局", n: total },
+  };
+  let scope = "layout";
+  const text = (n) => `${n.requests} 次请求统计、${n.samples} 个样本`;
+  const summary = h("p", { class: "empty" });
+  const ok = btn("", { cls: "btn btn-danger" });
+  const options = Object.entries(scopes).map(([key, item]) => {
+    const radio = h("input", { type: "radio", name: "clear-scope", value: key, checked: key === scope });
+    radio.addEventListener("change", () => { scope = key; paint(); });
+    return h("label", { class: "check" }, [radio, `${item.label}（${text(item.n)}）`]);
+  });
+  const paint = () => {
+    const n = scopes[scope].n;
+    ok.textContent = `清除 ${text(n)}`;
+    ok.disabled = !n.requests && !n.samples;
+  };
+  paint();
+  ok.addEventListener("click", async () => {
+    try {
+      const body = { confirm: true, scope, layout: cur.id };
+      const res = await busy(ok, "清除中", () => apiPost("stats/clear", body));
+      closeSheet();
+      S.selected = "";
+      S.sampleId = "";
+      await refreshReport(true);
+      toast(`已清除 ${text(res)}，之后的请求会重新统计`);
+    } catch (err) {
+      summary.textContent = `清除失败：${errText(err)}`;
+      summary.className = "zone-msg";
+    }
+  });
+  summary.textContent = "清除片段的稳定度、出现率统计和请求样本，“未排片段”、警告、推荐排序与改动记录都从之后的请求重新开始。"
+    + "布局本身和检查器记录不受影响。清除后不能恢复。";
+  openSheet("清除统计记录", [h("div", { class: "confirm" }, [
+    h("div", {}, options), summary,
+    h("div", { class: "row" }, [btn("取消", { cls: "btn btn-ghost", onClick: closeSheet }), ok]),
+  ])], { single: true });
+}
+
 export async function recommend(button) {
   try {
     const res = await busy(button || $("#layout-recommend"), "生成中", () => apiPost("recommend", { layout: layout() }));
@@ -988,6 +1042,7 @@ export function init() {
   });
   $("#layout-recommend").addEventListener("click", (e) => recommend(e.currentTarget));
   $("#layout-versions").addEventListener("click", showVersions);
+  $("#stats-clear").addEventListener("click", openClearStats);
   $$("#tools-mode span").forEach((s) => {
     const pick = () => { layout().tools.mode = s.dataset.mode; if (s.dataset.mode === "custom" && !layout().tools.order.length) layout().tools.order = toolKeys(); changed(); };
     s.addEventListener("click", pick);

@@ -3,7 +3,7 @@
 <p align="center">自动识别每个插件注入的提示词片段，按你拖拽排好的顺序发出，让前缀缓存更稳定；压缩历史里反复重发的长工具结果；附带可以实时监控的调用检查器。</p>
 
 <p align="center">
-  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.0-blue" alt="Version 0.2.0"></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.1-blue" alt="Version 0.2.1"></a>
   <img src="https://img.shields.io/badge/AstrBot-%3E%3D4.29.0-6c5ce7" alt="AstrBot >=4.29.0">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-green" alt="License AGPL-3.0"></a>
 </p>
@@ -67,6 +67,7 @@ git clone "https://github.com/conFess233/astrbot_plugin_prompt_order"
 - **占位项**：“未排片段”是布局里没写到的片段的落点，它们留在原区，保持原来的相对顺序；“图片 / 音频”只能留在 TAIL 区。
 - **细分与别名**：点开片段卡片，可以给同一个插件的多块内容加锚点、切成几段；某个片段第一行变化、被识别成新片段时，可以用别名指向原来的片段。
 - **保存**：修改先作为草稿，右下角按钮会变成“放弃 / N 个布局未保存 / 保存”。每次保存生成一个新版本，“历史版本”里可以回滚。
+- **清除统计记录**：更换、停用或升级插件后，旧的统计会让“未排片段”、警告和推荐排序失去参考性。点“清除统计记录”，可以只清当前布局或清除全部布局的片段统计与请求样本，确认框会写明条数；之后的请求重新开始统计。布局本身和检查器记录不受影响，“改动记录”里的样本会一并清除。清除后不能恢复。
 
 **片段缺失时**：某个插件被关闭、本轮没有它的片段时，跳过即可，其余片段仍保持布局里的相对顺序。布局里该片段的位置会保留，插件重新打开后自动回到原位。
 
