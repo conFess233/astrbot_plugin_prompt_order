@@ -121,7 +121,48 @@ class StatsService:
             logger.warning("提示词编排：样本写入失败，下次重试", exc_info=True)
             self._samples_dirty = True
 
+    def clear(self, layout_id: str | None = None) -> dict[str, int]:
+        """清除统计与样本；layout_id 为 None 时清除全部布局。返回清除的条数。"""
+
+        with self._lock:
+            requests = 0
+            if self._conn is not None:
+                if layout_id is None:
+                    cur = self._conn.execute("DELETE FROM obs")
+                else:
+                    cur = self._conn.execute("DELETE FROM obs WHERE layout_id = ?", (layout_id,))
+                self._conn.commit()
+                requests = cur.rowcount
+            kept = [
+                s for s in self.samples if layout_id is not None and s.get("layout_id") != layout_id
+            ]
+            samples = len(self.samples) - len(kept)
+            self.samples.clear()
+            self.samples.extend(kept)
+            if samples:
+                self._samples_dirty = True
+        self.flush_samples()
+        return {"requests": requests, "samples": samples}
+
     # ---------- 读取 ----------
+
+    def counts(self) -> dict[str, dict[str, int]]:
+        """每个布局当前保存的统计请求数与样本数。"""
+
+        result: dict[str, dict[str, int]] = {}
+        with self._lock:
+            rows = []
+            if self._conn is not None:
+                rows = self._conn.execute(
+                    "SELECT layout_id, COUNT(*) FROM obs GROUP BY layout_id"
+                ).fetchall()
+            samples = list(self.samples)
+        for layout_id, count in rows:
+            result.setdefault(layout_id, {"requests": 0, "samples": 0})["requests"] = count
+        for sample in samples:
+            entry = result.setdefault(sample.get("layout_id", ""), {"requests": 0, "samples": 0})
+            entry["samples"] += 1
+        return result
 
     def segment_stats(self, layout_id: str) -> dict[str, Any]:
         """返回 {key: 统计}，以及窗口内的请求数。"""
