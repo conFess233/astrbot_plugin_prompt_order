@@ -3,7 +3,7 @@
 <p align="center">自动识别每个插件注入的提示词片段，按你拖拽排好的顺序发出，让前缀缓存更稳定；压缩历史里反复重发的长工具结果；附带可以实时监控的调用检查器。</p>
 
 <p align="center">
-  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.1-blue" alt="Version 0.2.1"></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.2-blue" alt="Version 0.2.2"></a>
   <img src="https://img.shields.io/badge/AstrBot-%3E%3D4.29.0-6c5ce7" alt="AstrBot >=4.29.0">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-green" alt="License AGPL-3.0"></a>
 </p>
@@ -127,7 +127,7 @@ git clone "https://github.com/conFess233/astrbot_plugin_prompt_order"
 
 这两项完全由你决定内容，插件不会自动判断哪些文字可以移动或删除。
 
-- **常驻说明**：SYSTEM 区标题旁的“常驻说明”按钮，写一段每轮都一样的文字，作为一个片段放进 SYSTEM 区（会被缓存），可以拖动调整位置。点开卡片可以修改或删除。
+- **常驻说明**：SYSTEM 区标题旁的“常驻说明”按钮，写一段每轮都一样的文字，作为一个片段先放进 SYSTEM 区（会被缓存），之后可以拖到任意位置，也可以移到 TAIL 区、紧挨着相关片段（例如记忆片段之前）。放在 TAIL 区时它跟本轮附加内容一起发送，每轮计费，不写入对话历史。点开卡片可以修改或删除。
 - **改写规则**：点开 TAIL 区的某个片段，在详情里添加“查找 → 替换为”规则，替换为空即删除。可以选择只作用于这个片段，或作用于同一来源的全部 TAIL 片段；支持 Python 正则表达式。规则按顺序执行，之后再做 JSON 压缩。勾选“同时把查找的文字加为常驻说明”，可以一步把一段固定说明从本轮片段移进 SYSTEM 区，之后再改写措辞。
 
 右侧“用草稿预览”会对所选样本演示效果：每条规则在该样本里命中几处、少了多少字，以及片段改写后的全文。规则在重排生效（非试运行）时才作用于请求；改动会记在“改动记录”里。

@@ -135,7 +135,7 @@ export function discard() {
 // ---------- 约束 ----------
 function denyReason(key, zone) {
   if (key.startsWith("tool:")) return zone === "tools" ? "" : "C3：工具只能在 TOOLS 区里排序";
-  if (isNote(key)) return zone === "system" ? "" : "常驻说明只能放在 SYSTEM 区";
+  if (isNote(key)) return zone === "tools" ? "常驻说明不能放进 TOOLS 区" : "";
   if (zone === "tools") return "C3：TOOLS 区只放工具";
   if (key === "@media") return zone === "tail" ? "" : "C2：图片和音频只能留在 TAIL 区";
   const st = statOf(key);
@@ -216,7 +216,9 @@ function metaChips(key, st) {
   if (SPECIAL[key]) return [chip(SPECIAL[key][1])];
   if (isNote(key)) {
     const note = noteOf(key);
-    return note ? [chip("常驻说明", "info"), chip(`${note.text.length} 字`)] : [chip("说明已删除", "warn")];
+    if (!note) return [chip("说明已删除", "warn")];
+    const inTail = layout().tail.includes(key);
+    return [chip("常驻说明", "info"), chip(`${note.text.length} 字`), chip(inTail ? "每轮计费 · 不存档" : "可缓存", inTail ? "warn" : "plain")];
   }
   if (key.endsWith("/*")) return [chip("整组", "info"), chip(`来源 ${key.slice(0, -2)}`)];
   if (!st) return [chip("最近未出现", "warn")];
@@ -582,7 +584,7 @@ function openNoteForm() {
   openSheet("新建常驻说明", [h("div", { class: "confirm" }, [
     h("p", {
       class: "empty",
-      text: "常驻说明会作为一个片段放进 SYSTEM 区（会被缓存），可以拖动调整位置。它不会自动删除本轮片段里的同类内容；需要的话，在 TAIL 区片段的详情里添加改写规则。",
+      text: "常驻说明会作为一个片段先放进 SYSTEM 区（会被缓存），之后可以拖到任意位置，也可以移到 TAIL 区紧挨着相关片段。它不会自动删除本轮片段里的同类内容；需要的话，在 TAIL 区片段的详情里添加改写规则。",
     }),
     h("label", { class: "field" }, ["说明内容", area]),
     err,
@@ -597,13 +599,14 @@ function deleteNote(key) {
   const index = cur.notes.findIndex((n) => NOTE + n.id === key);
   if (index < 0) return;
   const [note] = cur.notes.splice(index, 1);
-  const at = cur.system.indexOf(key);
+  const zone = cur.tail.includes(key) ? "tail" : "system";
+  const at = cur[zone].indexOf(key);
   removeEntry(key);
   if (S.selected === key) S.selected = "";
   changed();
   toast("已删除常驻说明（草稿）", "ok", "撤销", () => {
     cur.notes.splice(index, 0, note);
-    if (at >= 0) cur.system.splice(Math.min(at, cur.system.length), 0, key);
+    if (at >= 0) cur[zone].splice(Math.min(at, cur[zone].length), 0, key);
     changed();
   });
 }
@@ -626,7 +629,7 @@ function noteDetail(key) {
   return [
     h("p", {
       class: "empty",
-      text: "这段文字每轮都会原样放进 SYSTEM 区，按布局里的位置排列。修改后作为草稿，保存布局后生效。",
+      text: "这段文字每轮都会原样加进请求，按布局里的位置排列：放在 SYSTEM 区会被缓存；放在 TAIL 区则跟在本轮附加内容里，每轮计费，不写入对话历史。修改后作为草稿，保存布局后生效。",
     }),
     h("dl", { class: "kv" }, [
       h("dt", { text: "ID" }), h("dd", { class: "mono", text: note.id }),
@@ -1002,13 +1005,18 @@ export async function recommend(button) {
     const res = await busy(button || $("#layout-recommend"), "生成中", () => apiPost("recommend", { layout: layout() }));
     const cur = layout();
     // 推荐来自统计：去掉已删除的常驻说明，补回还没统计到的说明（放在未排片段之前）。
-    const notes = cur.notes.map((n) => NOTE + n.id);
+    // 用户放进 TAIL 区的说明保留原位，不被推荐挪走。
+    const inTail = cur.tail.filter((k) => isNote(k) && noteOf(k));
+    const notes = cur.notes.map((n) => NOTE + n.id).filter((k) => !inTail.includes(k));
     const system = res.layout.system.filter((k) => !isNote(k) || notes.includes(k));
     const missing = notes.filter((k) => !system.includes(k));
     const at = system.includes("@unplaced") ? system.indexOf("@unplaced") : system.length;
     system.splice(at, 0, ...missing);
     cur.system = system;
-    cur.tail = res.layout.tail.filter((k) => !isNote(k));
+    const tail = res.layout.tail.filter((k) => !isNote(k));
+    const tailAt = tail.includes("@unplaced") ? tail.indexOf("@unplaced") : tail.length;
+    tail.splice(tailAt, 0, ...inTail);
+    cur.tail = tail;
     changed();
     toast("已生成推荐排序（草稿），保存后生效");
   } catch (err) {
