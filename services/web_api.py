@@ -16,6 +16,7 @@ from astrbot.api.web import error_response, json_response, request, stream_respo
 
 from ..models.layout import LayoutError
 from .history import HistoryService
+from .hook_priority import hook_order
 from .inspector import InspectorService
 from .orderer import OrderService
 from .settings import (
@@ -70,6 +71,7 @@ class WebApi:
         inspector: InspectorService,
         history: HistoryService,
         on_settings_changed: Callable[[], None],
+        own_module: str,
     ) -> None:
         self.context = context
         self.config = config
@@ -77,6 +79,7 @@ class WebApi:
         self.inspector = inspector
         self.history = history
         self._settings_changed = on_settings_changed
+        self.own_module = own_module
         self._save_lock = asyncio.Lock()
         self.schema = load_schema(SCHEMA_PATH)
 
@@ -91,6 +94,7 @@ class WebApi:
             ("recommend", self.recommend, ["POST"], "生成推荐布局"),
             ("save", self.save, ["POST"], "保存布局为新版本"),
             ("versions", self.versions, ["GET"], "布局历史版本"),
+            ("hooks", self.hooks, ["GET"], "on_llm_request 钩子的执行顺序与优先级"),
             ("stats/counts", self.stats_counts, ["GET"], "各布局的统计与样本条数"),
             ("stats/clear", self.stats_clear, ["POST"], "清除统计与样本"),
             ("rollback", self.rollback, ["POST"], "回滚到历史版本"),
@@ -195,6 +199,12 @@ class WebApi:
             new_version = await asyncio.to_thread(self.order.store.rollback, version, base)
         logger.info(f"提示词编排：已回滚到 v{version}，生成 v{new_version}")
         return json_response({"version": new_version, "config": self.order.store.snapshot()})
+
+    @guarded
+    async def hooks(self):
+        data = hook_order(self.own_module)
+        data["configured"] = self.order.settings.arrange_priority
+        return json_response(data)
 
     @guarded
     async def stats_counts(self):

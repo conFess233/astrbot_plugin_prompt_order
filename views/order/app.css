@@ -202,3 +202,5 @@ pre.diff .skip { color: var(--subtle); font-style: italic; }
 .cfg-group .seg-input .num { width: 96px; flex: none; }
 .cfg-note { margin-top: 10px; }
 .diff li .cfg-revert { justify-self: start; height: 26px; padding: 0 9px; font-size: 12px; }
+.cov-main { display: grid; gap: 14px; min-width: 0; align-content: start; }
+.cov-note { margin-top: 12px; }

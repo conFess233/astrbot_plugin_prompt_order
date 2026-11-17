@@ -52,6 +52,7 @@ class CompactSettings:
 class Settings:
     enabled: bool = True
     dry_run: bool = True
+    arrange_priority: int = -99999
     stats_window: int = 200
     sample_limit: int = 30
     diff_char_limit: int = 50000
@@ -82,6 +83,7 @@ RANGES = {
     "retention_mb": (50, 10240),
     "memory_traces": (20, 2000),
     "stats_window": (20, 2000),
+    "arrange_priority": (-1_999_999_999, 1_999_999_999),
     "sample_limit": (5, 200),
     "diff_char_limit": (5000, 500000),
     "digest_max_chars": (150, 3000),
@@ -167,6 +169,7 @@ def load(config: Any) -> Settings:
         compact=compact,
         enabled=bool(cfg.get("enabled", True)),
         dry_run=bool(cfg.get("dry_run", True)),
+        arrange_priority=_int(cfg.get("arrange_priority", -99999), "arrange_priority", -99999),
         stats_window=_int(cfg.get("stats_window", 200), "stats_window", 200),
         sample_limit=_int(cfg.get("sample_limit", 30), "sample_limit", 30),
         diff_char_limit=_int(cfg.get("diff_char_limit", 50000), "diff_char_limit", 50000),

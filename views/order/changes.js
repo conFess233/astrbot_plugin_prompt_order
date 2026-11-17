@@ -119,14 +119,55 @@ const COVERAGE = [
   ["旁路调用（插件自己调用模型）", "检查器可记录（需打开开关）", "不参与排序"],
 ];
 
+// 钩子执行顺序表；返回排在重排之后的钩子。
+function renderHooks(data) {
+  const rows = data.hooks || [];
+  const after = rows.filter((r) => r.after_arrange && r.activated);
+  $("#hook-rows").replaceChildren(...rows.map((r, i) => {
+    let state = r.activated ? chip("重排之前", "plain") : chip("未启用", "plain");
+    if (r.own) state = chip(r.handler === "po_arrange" ? "重排" : "本插件", "info");
+    else if (r.activated && r.after_arrange) state = chip("重排之后", "bad");
+    else if (r.activated && r.tie) state = chip("与重排同级", "warn");
+    return h("tr", { class: r.own && r.handler === "po_arrange" ? "sel" : "" }, [
+      h("td", { class: "mono", text: String(i + 1) }),
+      h("td", {}, [h("span", { text: r.plugin }), h("span", { class: "sub", text: r.handler })]),
+      h("td", { class: "mono", text: String(r.priority) }),
+      h("td", {}, [state]),
+    ]);
+  }));
+  if (!rows.length) $("#hook-rows").replaceChildren(h("tr", {}, [h("td", { colspan: "4", class: "empty", text: "没有读到钩子列表。" })]));
+  return after;
+}
+
+function priorityNotes(data, after) {
+  const notes = [];
+  const actual = data.arrange_priority;
+  notes.push(h("p", { class: "empty", text: `当前 ${actual ?? "—"}，配置 ${data.configured}。` }));
+  if (actual !== null && actual !== undefined && actual !== data.configured) {
+    notes.push(h("p", { class: "zone-msg", text: "配置的优先级没有生效，宿主的钩子列表可能与本插件不兼容，详情见 AstrBot 日志。" }));
+  }
+  if (after.length) {
+    const lowest = Math.min(...after.map((r) => r.priority));
+    const names = [...new Set(after.map((r) => r.plugin))].join("、");
+    notes.push(h("p", { class: "zone-msg", text: `${names} 排在重排之后，它们对请求的改动不参与排序。` }));
+    notes.push(h("p", { class: "empty", text: `如果它们会往提示词里加内容，可以在“配置 → 重排与请求修整 → 重排钩子优先级”里改成比 ${lowest} 更低，例如 ${lowest - 1}，保存后立即生效。只读取请求、不改提示词的插件（如统计、诊断类）不需要调整。` }));
+  } else {
+    notes.push(h("p", { class: "empty", text: "没有启用中的插件排在重排之后。" }));
+  }
+  return notes;
+}
+
 async function loadCoverage() {
   $("#cov-rows").replaceChildren(...COVERAGE.map(([a, b, c]) => h("tr", {}, [h("td", { text: a }), h("td", { text: b }), h("td", { text: c })])));
   const side = $("#cov-side");
   try {
-    const [state, status, list] = await Promise.all([apiGet("state"), apiGet("inspector/status"), apiGet("samples", { limit: 100 })]);
+    const [state, status, list, hooks] = await Promise.all([
+      apiGet("state"), apiGet("inspector/status"), apiGet("samples", { limit: 100 }), apiGet("hooks"),
+    ]);
     const items = list.items || [];
     const late = items.filter((s) => s.late_changes).length;
     const providers = Object.entries(status.providers || {});
+    const after = renderHooks(hooks);
     side.replaceChildren(h("div", { class: "side-body" }, [
       h("h3", { text: "本次运行检测到" }),
       h("dl", { class: "kv" }, [
@@ -134,7 +175,8 @@ async function loadCoverage() {
         h("dt", { text: "重排后改动" }), h("dd", {}, [late ? chip(`最近 ${items.length} 个样本中有 ${late} 个`, "bad") : chip("未发现", "ok")]),
         h("dt", { text: "线路层" }), h("dd", { text: providers.length ? `${providers.filter(([, m]) => m === "httpx").length} / ${providers.length} 个 provider 取得实际请求` : "还没有包装 provider" }),
       ]),
-      h("p", { class: "empty", style: { marginTop: "12px" }, text: "表中“不能”的几类改动不会出现在排序里；如果某个插件在本插件之后修改请求，可以在改动记录里看到它的名字。" }),
+      h("div", { class: "section" }, [h("h4", { text: "重排钩子优先级" }), ...priorityNotes(hooks, after)]),
+      h("p", { class: "empty cov-note", text: "表中“不能”的几类改动不会出现在排序里；如果某个插件在本插件之后修改请求，可以在改动记录里看到它的名字。" }),
     ]));
   } catch (err) {
     side.replaceChildren(h("p", { class: "empty", text: `读取状态失败：${errText(err)}` }));

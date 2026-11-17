@@ -72,11 +72,15 @@ def arrange(
         if seg.media:
             target, rank = "tail", _fallback_rank(layout.tail, MEDIA)
         elif seg.synthetic:
-            # 常驻说明只放在 SYSTEM 区；没排进布局时落在“未排片段”处。
-            target = "system"
-            rank = pattern_rank(seg.key, seg.owner, layout.system)
-            if rank is None:
-                rank = _fallback_rank(layout.system, UNPLACED)
+            # 常驻说明可以放在 SYSTEM 或 TAIL 区（TAIL 区里作为不存档片段）；
+            # 没排进布局时落在 SYSTEM 区的“未排片段”处。
+            for zone in ("system", "tail"):
+                rank = pattern_rank(seg.key, seg.owner, zones[zone])
+                if rank is not None:
+                    target = zone
+                    break
+            if target is None:
+                target, rank = "system", _fallback_rank(layout.system, UNPLACED)
         else:
             for zone in ("system", "tail"):
                 rank = pattern_rank(seg.key, seg.owner, zones[zone], seg.zone, zone)

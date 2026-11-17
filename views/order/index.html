@@ -183,7 +183,13 @@
           <aside class="side"><div class="card side-card" id="chg-side"></div></aside>
         </div>
         <div class="layout" id="chg-pane-coverage" hidden>
-          <div class="card"><div class="table-wrap"><table><thead><tr><th>改动发生在哪里</th><th>识别来源</th><th>参与排序</th></tr></thead><tbody id="cov-rows"></tbody></table></div></div>
+          <div class="cov-main">
+            <div class="card"><div class="table-wrap"><table><thead><tr><th>改动发生在哪里</th><th>识别来源</th><th>参与排序</th></tr></thead><tbody id="cov-rows"></tbody></table></div></div>
+            <div class="card">
+              <div class="table-tools"><div><strong>钩子执行顺序</strong><span>所有插件的 on_llm_request 钩子，按实际执行顺序排列；排在重排之后的改动不参与排序</span></div></div>
+              <div class="table-wrap"><table><thead><tr><th>顺序</th><th>插件 / 钩子</th><th>优先级</th><th>状态</th></tr></thead><tbody id="hook-rows"></tbody></table></div>
+            </div>
+          </div>
           <aside class="side"><div class="card side-card" id="cov-side"></div></aside>
         </div>
       </section>

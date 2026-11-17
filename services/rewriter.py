@@ -128,7 +128,7 @@ def rewrite_text(
 
 
 def note_segments(layout: Layout, start: int) -> list[Segment]:
-    """布局里的常驻说明作为 SYSTEM 区片段加入本轮。"""
+    """布局里的常驻说明作为片段加入本轮；放在哪个区由布局决定。"""
 
     return [
         Segment(
