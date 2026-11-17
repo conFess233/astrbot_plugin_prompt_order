@@ -15,6 +15,7 @@ from astrbot.api import logger
 
 from ..models.layout import MEDIA, UNPLACED, Layout
 from ..models.segment import Segment
+from ..utils.signature import tool_definition
 from .arranger import pattern_rank
 from .storage import atomic_write_json
 
@@ -67,8 +68,9 @@ class StatsService:
     # ---------- 写入 ----------
 
     def observe(self, layout_id: str, segments: list[Segment]) -> None:
-        payload = [
-            {
+        payload = []
+        for s in segments:
+            item = {
                 "key": s.key,
                 "owner": s.owner,
                 "zone": s.zone,
@@ -78,8 +80,11 @@ class StatsService:
                 "media": s.media,
                 "order": s.order,
             }
-            for s in segments
-        ]
+            if s.zone == "tools" and s.ref is not None:
+                # 工具按完整定义统计；旧记录只有名字，不带 def 标记，不参与变化判断。
+                definition = tool_definition(s.ref)
+                item.update(hash=text_hash(definition), len=len(definition), definition=True)
+            payload.append(item)
         with self._lock:
             if self._conn is None:
                 return
@@ -195,7 +200,8 @@ class StatsService:
                     },
                 )
                 entry["seen"] += 1
-                entry["hashes"].add(item["hash"])
+                if item["zone"] != "tools" or item.get("definition"):
+                    entry["hashes"].add(item["hash"])
                 entry["len_sum"] += item["len"]
                 entry["order_sum"] += item["order"]
         result = {}
@@ -206,7 +212,12 @@ class StatsService:
             entry["presence"] = round(seen / total, 4) if total else 0
             entry["avg_len"] = round(entry.pop("len_sum") / seen)
             entry["avg_order"] = entry.pop("order_sum") / seen
-            entry["level"] = STATIC if distinct == 1 else OCCASIONAL if distinct <= 5 else DYNAMIC
+            if distinct == 0:
+                entry["level"] = ""
+            else:
+                entry["level"] = (
+                    STATIC if distinct == 1 else OCCASIONAL if distinct <= 5 else DYNAMIC
+                )
             result[key] = entry
         return {"requests": total, "segments": result}
 
@@ -249,6 +260,43 @@ def placement(key: str, owner: str, zone: str, layout: Layout) -> str:
     if pattern_rank(key, owner, layout.tail, zone, "tail") is not None:
         return "tail"
     return zone
+
+
+def _tool_warnings(segs: dict[str, Any], requests: int) -> list[dict[str, str]]:
+    """工具排在整个提示词最前面：定义变化或工具增减都会让后面的缓存全部失效。"""
+
+    found = []
+    tools = [e for e in segs.values() if e["zone"] == "tools"]
+    for e in sorted(tools, key=lambda e: e["key"]):
+        if e["level"] in (OCCASIONAL, DYNAMIC):
+            often = "每轮都在变" if e["level"] == DYNAMIC else f"有 {e['distinct']} 个版本"
+            found.append(
+                {
+                    "level": "danger" if e["level"] == DYNAMIC else "warn",
+                    "text": (
+                        f"工具 {e['key'][5:]}（来源 {e['owner']}）的说明或参数在最近 "
+                        f"{requests} 次请求里{often}。工具排在提示词最前面，"
+                        "它一变，system 和全部历史的缓存都会失效；调整顺序解决不了，"
+                        "需要让插件固定工具说明，或停用这个工具。"
+                    ),
+                }
+            )
+    partial = [e for e in tools if e["presence"] < 0.95]
+    if partial:
+        names = "、".join(
+            f"{e['key'][5:]}（{round(e['presence'] * 100)}%）"
+            for e in sorted(partial, key=lambda e: e["presence"])[:5]
+        )
+        found.append(
+            {
+                "level": "warn",
+                "text": (
+                    f"工具列表不固定：{names} 只在部分请求里出现。"
+                    "工具增减同样会让后面的缓存全部失效。"
+                ),
+            }
+        )
+    return found
 
 
 def warnings(
@@ -323,12 +371,16 @@ def warnings(
                     ),
                 }
             )
+    found.extend(_tool_warnings(segs, stats["requests"]))
     late = {c["owner"] for s in samples for c in s.get("changes", []) if c.get("after_arrange")}
     if late:
         found.append(
             {
                 "level": "danger",
-                "text": f"{'、'.join(sorted(late))} 在重排之后又修改了请求，这些改动没有参与排序。",
+                "text": (
+                    f"{'、'.join(sorted(late))} 在重排之后又修改了请求，这些改动没有参与排序。"
+                    "可以在“覆盖范围”里查看钩子顺序，并在配置里调低重排钩子优先级。"
+                ),
             }
         )
     used = set(layout.system) | set(layout.tail)

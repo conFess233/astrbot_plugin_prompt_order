@@ -12,6 +12,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .services import settings as settings_service
 from .services.history import HistoryService
+from .services.hook_priority import set_arrange_priority
 from .services.inspector import InspectorService
 from .services.orderer import STATE_KEY, OrderService
 from .services.web_api import WebApi
@@ -19,7 +20,7 @@ from .services.web_api import WebApi
 PLUGIN_NAME = "astrbot_plugin_prompt_order"
 # 第一个执行：拍基线、补包装。其余插件的钩子都在它之后。
 BEGIN_PRIORITY = 2_000_000_000
-# 在所有注入提示词的插件之后、cost_control 尾部诊断（-100000）之前。
+# 在所有注入提示词的插件之后、cost_control 尾部诊断（-100000）之前；可在配置里调整。
 ARRANGE_PRIORITY = -99999
 
 
@@ -32,14 +33,19 @@ class PromptOrderPlugin(Star):
         self.settings = settings_service.load(config)
         data_dir = Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
         data_dir.mkdir(parents=True, exist_ok=True)
-        self.order = OrderService(
-            data_dir, self.settings, own_module=type(self).__module__.rsplit(".", 1)[0]
-        )
+        self._own_module = type(self).__module__.rsplit(".", 1)[0]
+        self.order = OrderService(data_dir, self.settings, own_module=self._own_module)
         self.inspector = InspectorService(data_dir, self.settings, context)
         self.order.inspector = self.inspector
         self.history = HistoryService(data_dir, self.settings.compact, context)
         self.web = WebApi(
-            context, config, self.order, self.inspector, self.history, self._reload_settings
+            context,
+            config,
+            self.order,
+            self.inspector,
+            self.history,
+            self._reload_settings,
+            self._own_module,
         )
         self._started = False
 
@@ -48,6 +54,7 @@ class PromptOrderPlugin(Star):
         self.inspector.start()
         self.history.start()
         self.web.register()
+        self._apply_priority()
         self._started = True
         mode = "试运行" if self.settings.dry_run else "生效中"
         inspector = "开启" if self.settings.inspector.enabled else "关闭"
@@ -61,6 +68,13 @@ class PromptOrderPlugin(Star):
         self.history.settings = self.settings.compact
         self.inspector.apply_settings(self.settings)
         self.inspector.refresh()
+        self._apply_priority()
+
+    def _apply_priority(self) -> None:
+        try:
+            set_arrange_priority(self._own_module, self.settings.arrange_priority)
+        except Exception:
+            logger.warning("提示词编排：调整重排钩子优先级失败，保持原值", exc_info=True)
 
     @filter.on_llm_request(priority=BEGIN_PRIORITY)
     async def po_begin(self, event: AstrMessageEvent, req: ProviderRequest) -> None:

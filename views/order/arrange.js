@@ -287,9 +287,8 @@ function cardActions(key, zone, index) {
     ];
   }
   if (zone === "tools") {
-    return layout().tools.mode === "custom"
-      ? [mini("up", "上移", () => move(key, zone, index - 1)), mini("down", "下移", () => move(key, zone, index + 1))]
-      : [];
+    const name = key.slice(5);
+    return [mini("up", "上移", () => moveTool(name, index - 1)), mini("down", "下移", () => moveTool(name, index + 1))];
   }
   const other = zone === "system" ? "tail" : "system";
   const acts = [
@@ -302,8 +301,47 @@ function cardActions(key, zone, index) {
   return acts;
 }
 
+// 第一次手动调整工具顺序时确认一次；之后排序方式切到“自定义”。
+let toolsConfirmed = false;
+async function editTools(apply) {
+  const cur = layout();
+  if (!toolsConfirmed) {
+    const yes = await confirmBox(
+      "调整工具顺序",
+      "工具定义排在整个提示词的最前面。保存新顺序后，命中这个布局的会话在下一次请求时，工具、system 和全部历史的缓存都会失效一次；之后顺序不再变化就不受影响。"
+        + "如果是某个工具的说明每轮都在变，调整顺序解决不了，请看右侧的警告。",
+      "继续调整",
+      false,
+    );
+    if (!yes) return;
+    toolsConfirmed = true;
+  }
+  const order = toolKeys();
+  if (apply(order) === false) return;
+  cur.tools.order = order;
+  cur.tools.mode = "custom";
+  changed();
+}
+
+function moveTool(name, to) {
+  const order = toolKeys();
+  const from = order.indexOf(name);
+  if (from < 0 || to < 0 || to >= order.length || to === from) return;
+  editTools((list) => {
+    list.splice(list.indexOf(name), 1);
+    list.splice(to, 0, name);
+  }).then(() => requestAnimationFrame(() => {
+    const el = $$("#zone-tools .seg-card").find((c) => c.dataset.key === `tool:${name}`);
+    if (el) el.focus();
+  }));
+}
+
 function move(key, zone, to) {
-  const list = zone === "tools" ? layout().tools.order : zoneList(zone);
+  if (zone === "tools") {
+    moveTool(key.slice(5), to);
+    return;
+  }
+  const list = zoneList(zone);
   const from = list.indexOf(key);
   if (from < 0 || to < 0 || to >= list.length) return;
   list.splice(from, 1);
@@ -345,10 +383,12 @@ function renderTools() {
   const names = toolKeys();
   box.replaceChildren(...names.map((name, i) => {
     const card = segCard(`tool:${name}`, "tools", i);
-    card.draggable = cur.tools.mode === "custom";
     card.querySelector(".key").textContent = name;
     const st = statOf(`tool:${name}`);
-    card.querySelector(".meta").replaceChildren(chip(st ? `来源 ${st.owner}` : "最近未出现", st ? "plain" : "warn"), ...(st && st.presence < 0.95 ? [chip(`出现 ${Math.round(st.presence * 100)}%`, "warn")] : []));
+    const chips = [chip(st ? `来源 ${st.owner}` : "最近未出现", st ? "plain" : "warn")];
+    if (st && LEVEL[st.level]) chips.push(chip(LEVEL[st.level][0], LEVEL[st.level][1]));
+    if (st && st.presence < 0.95) chips.push(chip(`出现 ${Math.round(st.presence * 100)}%`, "warn"));
+    card.querySelector(".meta").replaceChildren(...chips);
     return card;
   }));
   if (!names.length) box.append(h("li", { class: "empty", text: "还没有统计到工具" }));
@@ -805,7 +845,7 @@ function bindZone(zoneEl) {
   const zone = zoneEl.dataset.zone;
   zoneEl.addEventListener("dragover", (e) => {
     if (!S.drag) return;
-    if (zone === "tools" && (layout().tools.mode !== "custom" || S.drag.from !== "tools")) return;
+    if (zone === "tools" && S.drag.from !== "tools") return;
     const reason = denyReason(S.drag.key, zone) || (SPECIAL[S.drag.key] && S.drag.from !== zone ? "占位项只能在本区移动" : "");
     clearDrop();
     if (reason) {
@@ -831,12 +871,11 @@ function bindZone(zoneEl) {
     const { key, from } = S.drag;
     clearDrop();
     if (zone === "tools") {
-      const order = toolKeys();
       const name = key.slice(5);
-      const from_i = order.indexOf(name);
-      order.splice(from_i, 1);
-      order.splice(index > from_i ? index - 1 : index, 0, name);
-      layout().tools.order = order;
+      const fromIndex = toolKeys().indexOf(name);
+      S.drag = null;
+      moveTool(name, index > fromIndex ? index - 1 : index);
+      return;
     } else {
       const list = zoneList(zone);
       const old = list.indexOf(key);

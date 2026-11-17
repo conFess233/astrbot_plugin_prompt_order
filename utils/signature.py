@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+from typing import Any
 
 _VOLATILE = re.compile(r"[0-9a-fA-F]{8,}|\d+")
 _SPACES = re.compile(r"\s+")
@@ -21,3 +23,14 @@ def signature(text: str) -> str:
 
 def make_key(owner: str, sig: str) -> str:
     return f"{owner}/{sig}"
+
+
+def tool_definition(tool: Any) -> str:
+    """工具的完整定义（名字、说明、参数），用来发现每轮都在变的工具。"""
+
+    data = {
+        "name": str(getattr(tool, "name", "")),
+        "description": str(getattr(tool, "description", "") or ""),
+        "parameters": getattr(tool, "parameters", None),
+    }
+    return json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
