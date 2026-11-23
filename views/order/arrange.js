@@ -835,8 +835,11 @@ function clearDrop() {
   $$(".drop-line").forEach((l) => l.remove());
 }
 
+// 落点序号按“去掉被拖动的卡片之后”的列表计算，与 placeEntry / moveTool 先移除再插入一致。
+// 用 key 排除被拖动的卡片：dragging 类在下一帧才加上，快速拖放时可能还没有。
 function dropIndex(zoneEl, y) {
-  const cards = $$(".seg-card:not(.dragging)", zoneEl);
+  const dragged = S.drag && S.drag.key;
+  const cards = $$(".seg-card", zoneEl).filter((c) => c.dataset.key !== dragged);
   for (let i = 0; i < cards.length; i += 1) {
     const r = cards[i].getBoundingClientRect();
     if (y < r.top + r.height / 2) return [i, cards[i]];
@@ -871,19 +874,14 @@ function bindZone(zoneEl) {
     e.preventDefault();
     if (!S.drag) return;
     const [index] = dropIndex(zoneEl, e.clientY);
-    const { key, from } = S.drag;
+    const { key } = S.drag;
     clearDrop();
     if (zone === "tools") {
-      const name = key.slice(5);
-      const fromIndex = toolKeys().indexOf(name);
       S.drag = null;
-      moveTool(name, index > fromIndex ? index - 1 : index);
+      moveTool(key.slice(5), index);
       return;
     } else {
-      const list = zoneList(zone);
-      const old = list.indexOf(key);
-      const at = from === zone && old >= 0 && old < index ? index - 1 : index;
-      placeEntry(key, zone, at);
+      placeEntry(key, zone, index);
     }
     S.drag = null;
     changed();
